@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+/src/generated/prisma
+
+# Firebase service account keys — NEVER commit these to version control.
+# Revoke any keys already committed at: https://console.firebase.google.com/project/_/settings/serviceaccounts
+src/**/*firebase-adminsdk*.json
+src/**/*-adminsdk-*.json
+config/**/*firebase*.json
+
+server.txt
+seerver.txt

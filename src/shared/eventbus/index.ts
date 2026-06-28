@@ -1,0 +1,24 @@
+import { EventEmitter2 } from 'eventemitter2';
+
+export interface AppEvents {
+  'booking.confirmed': { bookingId: string; customerId: string; vehicleType: string };
+  'booking.driver_assigned': { bookingId: string; driverId: string; customerId: string };
+  'booking.picked_up': { bookingId: string };
+  'booking.delivered': { bookingId: string; customerId: string; totalFare: number };
+  'booking.cancelled': { bookingId: string; customerId: string; reason: string };
+  'payment.completed': { bookingId: string; customerId: string; amount: number; method: string };
+  'payment.wallet_topped_up': { userId: string; amount: number };
+  'rewards.coins_earned': { userId: string; coins: number; bookingId: string };
+  'booking.bid_accepted': { bookingId: string; driverId: string };
+}
+
+class TypedEventBus extends EventEmitter2 {
+  emit<K extends keyof AppEvents>(event: K, data: AppEvents[K]): boolean {
+    return super.emit(event as string, data);
+  }
+  on<K extends keyof AppEvents>(event: K, listener: (data: AppEvents[K]) => void): this {
+    return super.on(event as string, listener) as this;
+  }
+}
+
+export const eventBus = new TypedEventBus({ wildcard: false, maxListeners: 20 });

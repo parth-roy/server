@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); prisma.booking.updateMany({ where: { totalFare: null }, data: { totalFare: 50.0 } }).then(res => { console.log(res); process.exit(0); });

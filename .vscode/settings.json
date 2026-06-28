@@ -1,0 +1,8 @@
+{
+  // Use the project's OWN TypeScript (node_modules/typescript) instead of
+  // VS Code's bundled TypeScript. This ensures tsconfig options like
+  // "ignoreDeprecations": "6.0" are validated against the correct version.
+  //
+  // ⚠️ After changing this: Cmd/Ctrl+Shift+P → "TypeScript: Restart TS Server"
+  "typescript.tsdk": "node_modules/typescript/lib"
+}
