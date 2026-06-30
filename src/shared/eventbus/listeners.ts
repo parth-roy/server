@@ -1,5 +1,5 @@
 import { eventBus } from './index';
-import { dispatchBooking } from '@modules/dispatch/dispatch.service';
+import { dispatchBooking, dispatchWorkers } from '@modules/dispatch/dispatch.service';
 import { earnCoins } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { notificationService } from '@modules/notifications/notification.service';
@@ -23,6 +23,16 @@ export function registerEventListeners(): void {
             await dispatchBooking(bookingId);
         } catch (err) {
             logger.error(`[EventBus] Dispatch failed for booking ${bookingId}:`, err);
+        }
+    });
+
+    // booking.confirmed → if labor required, dispatch nearest available workers IN PARALLEL
+    // This is a SECOND listener on the same event — does NOT block or affect driver dispatch above.
+    eventBus.on('booking.confirmed', async ({ bookingId }) => {
+        try {
+            await dispatchWorkers(bookingId);
+        } catch (err) {
+            logger.error(`[EventBus] Worker dispatch failed for booking ${bookingId}:`, err);
         }
     });
 

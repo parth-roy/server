@@ -1,0 +1,1323 @@
+import { prisma } from '@shared/db/prisma';
+import { getRedis } from '@config/redis';
+import { getMessaging } from '@config/firebase';
+import { env } from '@config/env';
+import { AppError } from '@shared/errors/AppError';
+import { logger } from '@shared/logger';
+import { notificationService } from '@modules/notifications/notification.service';
+import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType } from '@prisma/client';
+import { emitToWorkerRoom, emitToBookingRoom } from '@shared/socket/socket.instance';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import type {
+  SendOtpInput,
+  VerifyOtpInput,
+  UpdateStatusInput,
+  UpdateLocationInput,
+  UpdatePreferencesInput,
+  UploadDocumentsInput,
+  AvailableJobsQuery,
+  DeclineJobInput,
+  CompleteJobInput,
+  JobRadarQuery,
+  WithdrawInput,
+  HistoryQuery,
+  EarningsChartQuery,
+  SosInput,
+} from './workforce.schema';
+
+const redis = getRedis();
+const OTP_TTL_SECONDS = 300; // 5 minutes
+const COMPLETION_OTP_TTL_SECONDS = 900; // 15 minutes
+const OTP_KEY = (phone: string) => `workforce:otp:${phone}`;
+const WORKER_LOCATION_KEY = (workerId: string) => `worker:location:${workerId}`;
+const WORKER_LOCATION_TTL = 60; // seconds — stale after one missed heartbeat
+
+// ─────────────────────────────────────────────
+// Haversine helper (duplicated from dispatch to avoid circular imports)
+// ─────────────────────────────────────────────
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─────────────────────────────────────────────
+// OTP HELPERS (dual-write Redis + in-memory)
+// ─────────────────────────────────────────────
+const inMemoryOtp = new Map<string, { otp: string; expiresAt: number }>();
+
+async function storeOtp(phone: string, otp: string): Promise<void> {
+  inMemoryOtp.set(phone, { otp, expiresAt: Date.now() + OTP_TTL_SECONDS * 1000 });
+  try {
+    await redis.set(OTP_KEY(phone), otp, 'EX', OTP_TTL_SECONDS);
+  } catch {
+    logger.warn('[Workforce OTP] Redis write failed — in-memory only');
+  }
+}
+
+async function getOtp(phone: string): Promise<string | null> {
+  try {
+    const redisOtp = await redis.get(OTP_KEY(phone));
+    if (redisOtp) return redisOtp;
+  } catch {
+    logger.warn('[Workforce OTP] Redis read failed — checking in-memory');
+  }
+  const mem = inMemoryOtp.get(phone);
+  if (mem && mem.expiresAt > Date.now()) return mem.otp;
+  return null;
+}
+
+async function deleteOtp(phone: string): Promise<void> {
+  inMemoryOtp.delete(phone);
+  try { await redis.del(OTP_KEY(phone)); } catch { /* non-fatal */ }
+}
+
+// ─────────────────────────────────────────────
+// AUTH — SEND OTP
+// ─────────────────────────────────────────────
+export async function sendOtp(input: SendOtpInput): Promise<{ message: string }> {
+  const otp = String(crypto.randomInt(100000, 999999));
+  await storeOtp(input.phone, otp);
+
+  // In production: send via FCM data message or MSG91 SMS
+  if (env.NODE_ENV !== 'production') {
+    logger.info(`[Workforce OTP] Dev OTP for ${input.phone}: ${otp}`);
+  } else {
+    // Best-effort FCM: find existing user if any and send as data message
+    const user = await prisma.user.findUnique({ where: { phone: input.phone }, select: { fcmToken: true } });
+    if (user?.fcmToken) {
+      try {
+        await notificationService.sendToDevice(user.fcmToken, {
+          title: 'Your OTP',
+          body: `Your GoMyTruck Workforce OTP is ${otp}. Valid for 5 minutes.`,
+          data: { type: 'WORKFORCE_OTP', otp },
+        });
+      } catch (err) {
+        logger.error('[Workforce OTP] FCM send failed:', err);
+      }
+    }
+  }
+
+  return { message: 'OTP sent successfully' };
+}
+
+// ─────────────────────────────────────────────
+// AUTH — VERIFY OTP → JWT
+// ─────────────────────────────────────────────
+export async function verifyOtp(input: VerifyOtpInput) {
+  const storedOtp = await getOtp(input.phone);
+  if (!storedOtp || storedOtp !== input.otp) {
+    throw AppError.badRequest('Invalid or expired OTP', 'INVALID_OTP');
+  }
+  await deleteOtp(input.phone); // Single-use
+
+  // Upsert user with WORKER role
+  const user = await prisma.user.upsert({
+    where: { phone: input.phone },
+    update: {
+      isActive: true,
+      ...(input.fcmToken && { fcmToken: input.fcmToken }),
+      ...(input.name && { name: input.name }),
+    },
+    create: {
+      phone: input.phone,
+      role: UserRole.WORKER,
+      isActive: true,
+      profileComplete: false,
+      ...(input.fcmToken && { fcmToken: input.fcmToken }),
+      ...(input.name && { name: input.name }),
+    },
+    select: { id: true, phone: true, role: true, name: true, profileComplete: true },
+  });
+
+  // Ensure Worker record exists
+  let worker = await prisma.worker.findUnique({ where: { userId: user.id } });
+  if (!worker) {
+    worker = await prisma.worker.create({
+      data: { userId: user.id },
+    });
+  }
+
+  // Issue JWT pair
+  const accessToken = jwt.sign(
+    { userId: user.id, phone: user.phone, role: user.role },
+    env.JWT_ACCESS_SECRET,
+    { expiresIn: env.JWT_ACCESS_EXPIRES as any }
+  );
+  const refreshTokenValue = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+  await prisma.refreshToken.create({
+    data: { token: refreshTokenValue, userId: user.id, expiresAt },
+  });
+
+  return {
+    user: { ...user, workerId: worker.id },
+    accessToken,
+    refreshToken: refreshTokenValue,
+    isNewUser: !user.profileComplete,
+  };
+}
+
+// ─────────────────────────────────────────────
+// PROFILE — GET ME
+// ─────────────────────────────────────────────
+export async function getMe(userId: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    include: {
+      user: { select: { id: true, name: true, phone: true, profileImageUrl: true, profileComplete: true } },
+    },
+  });
+  if (!worker) throw AppError.notFound('Worker profile not found');
+  return worker;
+}
+
+// ─────────────────────────────────────────────
+// PROFILE — UPDATE STATUS (ONLINE/OFFLINE toggle)
+// ─────────────────────────────────────────────
+export async function updateStatus(userId: string, input: UpdateStatusInput) {
+  const worker = await prisma.worker.findUnique({ where: { userId } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  // Cannot go AVAILABLE if on a job
+  if (input.status === 'AVAILABLE' && worker.status === WorkerStatus.ON_JOB) {
+    throw AppError.conflict('Cannot go available while on an active job', 'ON_JOB');
+  }
+
+  // Cannot go AVAILABLE if not doc-verified
+  if (input.status === 'AVAILABLE' && !worker.isDocVerified) {
+    throw AppError.badRequest('Documents not verified. Please upload Aadhaar and PAN.', 'DOCS_UNVERIFIED');
+  }
+
+  const updated = await prisma.worker.update({
+    where: { userId },
+    data: { status: input.status as WorkerStatus },
+  });
+  return updated;
+}
+
+// ─────────────────────────────────────────────
+// PROFILE — UPDATE LOCATION (called by background GPS service)
+// ─────────────────────────────────────────────
+export async function updateLocation(userId: string, input: UpdateLocationInput): Promise<void> {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const now = new Date();
+
+  // Cache in Redis (primary — fast reads for dispatch)
+  redis.setex(
+    WORKER_LOCATION_KEY(worker.id),
+    WORKER_LOCATION_TTL,
+    JSON.stringify({ lat: input.lat, lng: input.lng, updatedAt: now.getTime() }),
+  ).catch(err => logger.error('[Workforce] Redis location cache failed:', err));
+
+  // Snapshot to DB every 30s (rate-limited via Redis NX key)
+  const snapshotKey = `worker:db_snapshot:${worker.id}`;
+  redis.set(snapshotKey, '1', 'EX', 30, 'NX').then(wasSet => {
+    if (wasSet === 'OK') {
+      prisma.worker.update({
+        where: { id: worker.id },
+        data: { currentLat: input.lat, currentLng: input.lng, lastLocationAt: now },
+      }).catch(err => logger.error('[Workforce] DB location snapshot failed:', err));
+    }
+  }).catch(() => {
+    // Redis down — always write to DB
+    prisma.worker.update({
+      where: { id: worker.id },
+      data: { currentLat: input.lat, currentLng: input.lng, lastLocationAt: now },
+    }).catch(err => logger.error('[Workforce] DB location fallback write failed:', err));
+  });
+}
+
+// ─────────────────────────────────────────────
+// PROFILE — UPDATE PREFERENCES & BANK DETAILS
+// ─────────────────────────────────────────────
+export async function updatePreferences(userId: string, input: UpdatePreferencesInput) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const { name, fcmToken, ...workerFields } = input;
+
+  // Update user fields if provided
+  if (name || fcmToken) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(name && { name, profileComplete: true }),
+        ...(fcmToken && { fcmToken }),
+      },
+    });
+  }
+
+  // Update worker fields
+  const updated = await prisma.worker.update({
+    where: { userId },
+    data: {
+      ...(workerFields.maxWeightKg !== undefined && { maxWeightKg: workerFields.maxWeightKg }),
+      ...(workerFields.preferredTypes && { preferredTypes: workerFields.preferredTypes as LaborType[] }),
+      ...(workerFields.bankAccountNo && { bankAccountNo: workerFields.bankAccountNo }),
+      ...(workerFields.bankIfsc && { bankIfsc: workerFields.bankIfsc }),
+      ...(workerFields.bankName && { bankName: workerFields.bankName }),
+    },
+    include: { user: { select: { name: true, phone: true, profileImageUrl: true } } },
+  });
+
+  return updated;
+}
+
+// ─────────────────────────────────────────────
+// PROFILE — UPLOAD DOCUMENTS (S3 URLs stored after upload)
+// ─────────────────────────────────────────────
+export async function uploadDocuments(userId: string, input: UploadDocumentsInput) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const updated = await prisma.worker.update({
+    where: { userId },
+    data: {
+      ...(input.aadhaarUrl && { aadhaarUrl: input.aadhaarUrl }),
+      ...(input.panUrl && { panUrl: input.panUrl }),
+    },
+  });
+  return updated;
+}
+
+// ─────────────────────────────────────────────
+// DASHBOARD — STATS
+// ─────────────────────────────────────────────
+export async function getDashboardStats(userId: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: {
+      id: true, status: true, rating: true, totalJobs: true, acceptanceRate: true,
+      isDocVerified: true,
+    },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  // Today's completed jobs
+  const todayJobs = await prisma.jobAssignment.count({
+    where: {
+      workerId: worker.id,
+      status: WorkerJobStatus.COMPLETED,
+      completedAt: { gte: todayStart },
+    },
+  });
+
+  // Today's earnings (via wallet transactions referencing job assignments)
+  const todayWallet = await prisma.wallet.findUnique({ where: { userId } });
+  let todayEarnings = 0;
+  if (todayWallet) {
+    const txns = await prisma.walletTransaction.aggregate({
+      where: {
+        walletId: todayWallet.id,
+        type: WalletTransactionType.CREDIT,
+        reason: WalletTransactionReason.CASHBACK, // We use CASHBACK for worker payouts
+        createdAt: { gte: todayStart },
+      },
+      _sum: { amount: true },
+    });
+    todayEarnings = txns._sum.amount ?? 0;
+  }
+
+  // Active job (if any)
+  const activeJob = await prisma.jobAssignment.findFirst({
+    where: {
+      workerId: worker.id,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+    },
+    include: {
+      booking: {
+        select: {
+          bookingNumber: true, pickupAddress: true, laborType: true,
+          stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true } },
+        },
+      },
+    },
+  });
+
+  return {
+    status: worker.status,
+    isDocVerified: worker.isDocVerified,
+    rating: worker.rating,
+    totalJobs: worker.totalJobs,
+    acceptanceRate: worker.acceptanceRate,
+    today: { jobs: todayJobs, earnings: todayEarnings },
+    activeJob,
+  };
+}
+
+// ─────────────────────────────────────────────
+// JOBS — GET AVAILABLE JOB FEED
+// ─────────────────────────────────────────────
+export async function getAvailableJobs(userId: string, query: AvailableJobsQuery) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: { id: true, currentLat: true, currentLng: true, preferredTypes: true },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const { page, limit, laborType, sortBy } = query;
+  const skip = (page - 1) * limit;
+
+  // Build laborType filter: match bookings with compatible laborType
+  let laborTypeFilter: any = {};
+  if (laborType) {
+    laborTypeFilter = { laborType: { in: [laborType as LaborType, LaborType.BOTH] } };
+  }
+
+  // Get bookings that need workers and have open slots
+  const bookings = await prisma.booking.findMany({
+    where: {
+      laborRequired: true,
+      ...laborTypeFilter,
+      status: {
+        in: ['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'] as any[],
+      },
+    },
+    select: {
+      id: true,
+      bookingNumber: true,
+      pickupLat: true,
+      pickupLng: true,
+      pickupAddress: true,
+      laborType: true,
+      laborersCount: true,
+      laborCharge: true,
+      createdAt: true,
+      stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true } },
+      jobAssignments: {
+        where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
+        select: { id: true, workerId: true },
+      },
+    },
+    skip,
+    take: limit * 3, // Fetch extra because we'll filter by open slots
+    orderBy: { createdAt: 'desc' },
+  });
+
+  // Filter: only bookings with open slots, and worker not already assigned
+  const openBookings = bookings
+    .filter(b => {
+      const acceptedCount = b.jobAssignments.length;
+      const totalSlots = b.laborersCount ?? 1;
+      const alreadyAssigned = b.jobAssignments.some(a => a.workerId === worker.id);
+      return acceptedCount < totalSlots && !alreadyAssigned;
+    })
+    .map(b => {
+      const distanceKm =
+        worker.currentLat != null && worker.currentLng != null
+          ? Math.round(haversineKm(worker.currentLat, worker.currentLng, b.pickupLat, b.pickupLng) * 10) / 10
+          : null;
+      const acceptedCount = b.jobAssignments.length;
+      const totalSlots = b.laborersCount ?? 1;
+
+      return {
+        id: b.id,
+        bookingNumber: b.bookingNumber,
+        pickupAddress: b.pickupAddress,
+        dropAddress: b.stops[0]?.address ?? 'Destination',
+        laborType: b.laborType,
+        payoutAmount: b.laborCharge ?? 0,
+        slotsRemaining: totalSlots - acceptedCount,
+        totalSlots,
+        distanceKm,
+        createdAt: b.createdAt,
+      };
+    });
+
+  // Sort
+  if (sortBy === 'distance' && worker.currentLat != null) {
+    openBookings.sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
+  } else if (sortBy === 'payout') {
+    openBookings.sort((a, b) => b.payoutAmount - a.payoutAmount);
+  }
+
+  return {
+    jobs: openBookings.slice(0, limit),
+    meta: { page, limit, hasMore: openBookings.length > limit },
+  };
+}
+
+// ─────────────────────────────────────────────
+// JOBS — GET ACTIVE JOB
+// ─────────────────────────────────────────────
+export async function getActiveJob(userId: string) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findFirst({
+    where: {
+      workerId: worker.id,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+    },
+    include: {
+      booking: {
+        select: {
+          id: true,
+          bookingNumber: true,
+          pickupLat: true,
+          pickupLng: true,
+          pickupAddress: true,
+          laborType: true,
+          laborersCount: true,
+          status: true,
+          stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true, latitude: true, longitude: true } },
+        },
+      },
+    },
+  });
+
+  return assignment;
+}
+
+// ─────────────────────────────────────────────
+// JOBS — ACCEPT (Critical: race-condition safe)
+// ─────────────────────────────────────────────
+export async function acceptJob(userId: string, assignmentId: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: { id: true, status: true, isDocVerified: true },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+  if (!worker.isDocVerified) throw AppError.badRequest('Documents not verified', 'DOCS_UNVERIFIED');
+  if (worker.status === WorkerStatus.ON_JOB) throw AppError.conflict('Already on an active job', 'ON_JOB');
+
+  // Load assignment — verify it belongs to this worker and is still pending
+  const assignment = await prisma.jobAssignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true, status: true, workerId: true, bookingId: true, payoutAmount: true,
+      booking: { select: { laborersCount: true, laborRequired: true, status: true } },
+    },
+  });
+
+  if (!assignment) throw AppError.notFound('Assignment not found');
+  if (assignment.workerId !== worker.id) throw AppError.forbidden('Assignment does not belong to you');
+  if (!assignment.booking.laborRequired) throw AppError.badRequest('Booking does not require labor');
+  if (assignment.status !== WorkerJobStatus.PENDING_ACCEPTANCE) {
+    throw AppError.conflict(
+      assignment.status === WorkerJobStatus.DECLINED ? 'You already declined this job' : 'Assignment already responded',
+      'ALREADY_RESPONDED',
+    );
+  }
+
+  // Check if job is already full (pre-flight check — reduces contention)
+  const acceptedCount = await prisma.jobAssignment.count({
+    where: {
+      bookingId: assignment.bookingId,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+    },
+  });
+  const totalSlots = assignment.booking.laborersCount ?? 1;
+  if (acceptedCount >= totalSlots) {
+    throw AppError.conflict('This job is already full', 'JOB_FULL');
+  }
+
+  // ATOMIC ACCEPT: updateMany with status guard — only succeeds if still PENDING_ACCEPTANCE
+  // This is the race-condition safety net. If 10 workers try simultaneously,
+  // only the first N (up to totalSlots) succeed. The rest get count=0 and fail.
+  const result = await prisma.jobAssignment.updateMany({
+    where: {
+      id: assignmentId,
+      status: WorkerJobStatus.PENDING_ACCEPTANCE, // ← Atomic guard
+    },
+    data: { status: WorkerJobStatus.ACCEPTED },
+  });
+
+  if (result.count === 0) {
+    // Another worker claimed the last slot at the same millisecond
+    throw AppError.conflict('Job slot was just filled by another worker', 'JOB_FULL');
+  }
+
+  // Update worker status to ON_JOB
+  await prisma.worker.update({
+    where: { id: worker.id },
+    data: { status: WorkerStatus.ON_JOB },
+  });
+
+  // Re-count to check if all slots are now filled
+  const newAcceptedCount = await prisma.jobAssignment.count({
+    where: {
+      bookingId: assignment.bookingId,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+    },
+  });
+
+  const allSlotsFilled = newAcceptedCount >= totalSlots;
+  if (allSlotsFilled) {
+    // Notify booking room that all workers are assigned
+    emitToBookingRoom(assignment.bookingId, 'workers_fully_assigned', {
+      bookingId: assignment.bookingId,
+      workerCount: newAcceptedCount,
+    });
+  }
+
+  // FCM confirmation to worker
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
+  if (user?.fcmToken) {
+    notificationService.sendToDevice(user.fcmToken, {
+      title: '✅ Job Confirmed!',
+      body: `You have accepted the job. Head to the pickup location. Payout: ₹${assignment.payoutAmount}`,
+      data: { type: 'JOB_ACCEPTED', assignmentId },
+    }).catch(err => logger.error('[Workforce] FCM accept notification failed:', err));
+  }
+
+  await createNotification(
+    userId,
+    '✅ Job Confirmed!',
+    `You have accepted the job. Payout: ₹${assignment.payoutAmount}`,
+    NotificationType.BOOKING_STATUS,
+    assignment.bookingId,
+  );
+
+  logger.info(`[Workforce] Worker ${worker.id} accepted assignment ${assignmentId} (${newAcceptedCount}/${totalSlots} slots filled)`);
+  return { accepted: true, allSlotsFilled, slotsFilledCount: newAcceptedCount };
+}
+
+// ─────────────────────────────────────────────
+// JOBS — DECLINE
+// ─────────────────────────────────────────────
+export async function declineJob(userId: string, assignmentId: string, input: DeclineJobInput) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true, totalJobs: true, acceptanceRate: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findUnique({
+    where: { id: assignmentId },
+    select: { id: true, workerId: true, status: true, bookingId: true },
+  });
+  if (!assignment) throw AppError.notFound('Assignment not found');
+  if (assignment.workerId !== worker.id) throw AppError.forbidden('Assignment does not belong to you');
+  if (assignment.status !== WorkerJobStatus.PENDING_ACCEPTANCE) {
+    throw AppError.conflict('Assignment is no longer pending', 'ALREADY_RESPONDED');
+  }
+
+  await prisma.jobAssignment.update({
+    where: { id: assignmentId },
+    data: {
+      status: WorkerJobStatus.DECLINED,
+      declinedAt: new Date(),
+      declineReason: input.reason,
+    },
+  });
+
+  // Recalculate acceptance rate
+  const allAssignments = await prisma.jobAssignment.count({ where: { workerId: worker.id, status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.COMPLETED, WorkerJobStatus.DECLINED] } } });
+  const declinedCount = await prisma.jobAssignment.count({ where: { workerId: worker.id, status: WorkerJobStatus.DECLINED } });
+  const newRate = allAssignments > 0 ? Math.round(((allAssignments - declinedCount) / allAssignments) * 100) : 100;
+
+  await prisma.worker.update({
+    where: { id: worker.id },
+    data: { acceptanceRate: newRate },
+  });
+
+  logger.info(`[Workforce] Worker ${worker.id} declined assignment ${assignmentId}. Rate: ${newRate}%`);
+  return { declined: true };
+}
+
+// ─────────────────────────────────────────────
+// JOBS — MARK ARRIVED
+// ─────────────────────────────────────────────
+export async function markArrived(userId: string, assignmentId: string) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findUnique({ where: { id: assignmentId } });
+  if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
+  if (assignment.status !== WorkerJobStatus.ACCEPTED) {
+    throw AppError.conflict('Invalid status transition — must be ACCEPTED to mark arrived', 'INVALID_TRANSITION');
+  }
+
+  const updated = await prisma.jobAssignment.update({
+    where: { id: assignmentId },
+    data: { status: WorkerJobStatus.ARRIVED, arrivedAt: new Date() },
+  });
+
+  // Notify booking room
+  emitToBookingRoom(assignment.bookingId, 'worker_arrived', {
+    assignmentId, workerId: worker.id,
+  });
+
+  return updated;
+}
+
+// ─────────────────────────────────────────────
+// JOBS — START WORK
+// ─────────────────────────────────────────────
+export async function startJob(userId: string, assignmentId: string) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findUnique({ where: { id: assignmentId } });
+  if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
+  if (assignment.status !== WorkerJobStatus.ARRIVED) {
+    throw AppError.conflict('Must be ARRIVED before starting work', 'INVALID_TRANSITION');
+  }
+
+  const updated = await prisma.jobAssignment.update({
+    where: { id: assignmentId },
+    data: { status: WorkerJobStatus.IN_PROGRESS, startedAt: new Date() },
+  });
+
+  emitToBookingRoom(assignment.bookingId, 'worker_started', {
+    assignmentId, workerId: worker.id,
+  });
+
+  return updated;
+}
+
+// ─────────────────────────────────────────────
+// JOBS — REQUEST COMPLETION OTP (worker taps "I'm Done")
+// ─────────────────────────────────────────────
+export async function requestCompletionOtp(userId: string, assignmentId: string) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findUnique({
+    where: { id: assignmentId },
+    select: { id: true, workerId: true, status: true, bookingId: true, booking: { select: { customerId: true } } },
+  });
+  if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
+  if (assignment.status !== WorkerJobStatus.IN_PROGRESS) {
+    throw AppError.conflict('Work must be IN_PROGRESS to request completion OTP', 'INVALID_TRANSITION');
+  }
+
+  // Generate 4-digit OTP
+  const otp = String(crypto.randomInt(1000, 9999));
+  const otpExpiresAt = new Date(Date.now() + COMPLETION_OTP_TTL_SECONDS * 1000);
+
+  await prisma.jobAssignment.update({
+    where: { id: assignmentId },
+    data: { completionOtp: otp, otpExpiresAt },
+  });
+
+  // Send OTP to customer
+  const customer = await prisma.user.findUnique({
+    where: { id: assignment.booking.customerId },
+    select: { fcmToken: true, id: true },
+  });
+  if (customer?.fcmToken) {
+    notificationService.sendToDevice(customer.fcmToken, {
+      title: '🏗️ Worker Done — Verify Completion',
+      body: `Your worker is done. Verify completion with OTP: ${otp}`,
+      data: { type: 'WORKER_COMPLETION_OTP', otp, assignmentId },
+    }).catch(err => logger.error('[Workforce] Completion OTP FCM failed:', err));
+  }
+  await createNotification(
+    customer!.id,
+    '🏗️ Worker Done — Verify Completion',
+    `Your worker is done. Verify completion with OTP: ${otp}`,
+    NotificationType.BOOKING_STATUS,
+    assignment.bookingId,
+  );
+
+  logger.info(`[Workforce] Completion OTP generated for assignment ${assignmentId}`);
+  return { message: 'OTP sent to customer', otpExpiresAt };
+}
+
+// ─────────────────────────────────────────────
+// JOBS — COMPLETE (OTP verified)
+// ─────────────────────────────────────────────
+export async function completeJob(userId: string, assignmentId: string, input: CompleteJobInput) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const assignment = await prisma.jobAssignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true, workerId: true, status: true, bookingId: true,
+      completionOtp: true, otpExpiresAt: true, payoutAmount: true,
+    },
+  });
+  if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
+  if (assignment.status !== WorkerJobStatus.IN_PROGRESS) {
+    throw AppError.conflict('Work must be IN_PROGRESS to complete', 'INVALID_TRANSITION');
+  }
+
+  // Validate OTP
+  if (!assignment.completionOtp) {
+    throw AppError.badRequest('Request a completion OTP first', 'OTP_NOT_REQUESTED');
+  }
+  if (assignment.otpExpiresAt && assignment.otpExpiresAt < new Date()) {
+    throw AppError.badRequest('Completion OTP has expired', 'OTP_EXPIRED');
+  }
+  if (assignment.completionOtp !== input.otp) {
+    throw AppError.badRequest('Invalid completion OTP', 'INVALID_OTP');
+  }
+
+  const now = new Date();
+
+  // Mark assignment completed + clear OTP
+  await prisma.jobAssignment.update({
+    where: { id: assignmentId },
+    data: {
+      status: WorkerJobStatus.COMPLETED,
+      completedAt: now,
+      completionOtp: null,  // Clear OTP after use
+      otpExpiresAt: null,
+    },
+  });
+
+  // Update worker stats
+  await prisma.worker.update({
+    where: { id: worker.id },
+    data: {
+      totalJobs: { increment: 1 },
+      status: WorkerStatus.AVAILABLE, // Worker is free again
+    },
+  });
+
+  // Credit payout to worker's wallet (atomic)
+  const workerUserId = userId;
+  let wallet = await prisma.wallet.findUnique({ where: { userId: workerUserId } });
+  if (!wallet) {
+    wallet = await prisma.wallet.create({ data: { userId: workerUserId, cachedBalance: 0 } });
+  }
+
+  const newBalance = wallet.cachedBalance + assignment.payoutAmount;
+  await prisma.$transaction([
+    prisma.wallet.update({
+      where: { userId: workerUserId },
+      data: { cachedBalance: newBalance },
+    }),
+    prisma.walletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        type: WalletTransactionType.CREDIT,
+        reason: WalletTransactionReason.CASHBACK, // Using CASHBACK for worker payouts
+        amount: assignment.payoutAmount,
+        balanceAfter: newBalance,
+        referenceId: assignmentId,
+      },
+    }),
+  ]);
+
+  // FCM to worker confirming payout
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
+  if (user?.fcmToken) {
+    notificationService.sendToDevice(user.fcmToken, {
+      title: '💰 Job Completed!',
+      body: `₹${assignment.payoutAmount} has been credited to your wallet.`,
+      data: { type: 'JOB_COMPLETED', assignmentId, payout: String(assignment.payoutAmount) },
+    }).catch(err => logger.error('[Workforce] Completion FCM failed:', err));
+  }
+  await createNotification(
+    userId,
+    '💰 Job Completed!',
+    `₹${assignment.payoutAmount} has been credited to your wallet.`,
+    NotificationType.PAYMENT,
+    assignment.bookingId,
+  );
+
+  // Emit to booking room
+  emitToBookingRoom(assignment.bookingId, 'worker_completed', {
+    assignmentId, workerId: worker.id,
+  });
+
+  // Check if all workers for this booking have completed
+  const pendingWorkers = await prisma.jobAssignment.count({
+    where: {
+      bookingId: assignment.bookingId,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS, WorkerJobStatus.PENDING_ACCEPTANCE] },
+    },
+  });
+  if (pendingWorkers === 0) {
+    emitToBookingRoom(assignment.bookingId, 'all_workers_completed', { bookingId: assignment.bookingId });
+    logger.info(`[Workforce] All workers completed for booking ${assignment.bookingId}`);
+  }
+
+  logger.info(`[Workforce] Worker ${worker.id} completed job ${assignmentId}. Payout: ₹${assignment.payoutAmount}`);
+  return { completed: true, payoutAmount: assignment.payoutAmount };
+}
+
+// ─────────────────────────────────────────────
+// WALLET — BALANCE
+// ─────────────────────────────────────────────
+export async function getWalletBalance(userId: string) {
+  let wallet = await prisma.wallet.findUnique({ where: { userId } });
+  if (!wallet) {
+    wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
+  }
+
+  // Pending payout from active assignments
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  let pendingPayout = 0;
+  if (worker) {
+    const pending = await prisma.jobAssignment.aggregate({
+      where: {
+        workerId: worker.id,
+        status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+      },
+      _sum: { payoutAmount: true },
+    });
+    pendingPayout = pending._sum.payoutAmount ?? 0;
+  }
+
+  return { balance: wallet.cachedBalance, pendingPayout };
+}
+
+// ─────────────────────────────────────────────
+// WALLET — TRANSACTION HISTORY
+// ─────────────────────────────────────────────
+export async function getWalletTransactions(userId: string, page: number, limit: number) {
+  const wallet = await prisma.wallet.findUnique({ where: { userId } });
+  if (!wallet) return { transactions: [], meta: { total: 0, page, limit, totalPages: 0 } };
+
+  const skip = (page - 1) * limit;
+  const [transactions, total] = await prisma.$transaction([
+    prisma.walletTransaction.findMany({
+      where: { walletId: wallet.id },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.walletTransaction.count({ where: { walletId: wallet.id } }),
+  ]);
+
+  return { transactions, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+}
+
+// ─────────────────────────────────────────────
+// JOB RADAR — MAP PINS
+// ─────────────────────────────────────────────
+export async function getNearbyPins(userId: string, query: JobRadarQuery) {
+  const { lat, lng, radiusKm } = query;
+  
+  // Find nearby available jobs (similar to getAvailableJobs but mapped for pins)
+  const jobs = await prisma.booking.findMany({
+    where: {
+      status: 'CONFIRMED',
+      laborRequired: true,
+      jobAssignments: { none: { worker: { userId } } }, // Exclude jobs already offered/assigned to this worker
+    },
+    select: {
+      id: true,
+      bookingNumber: true,
+      pickupLat: true,
+      pickupLng: true,
+      laborCharge: true,
+      laborType: true,
+      laborersCount: true,
+    }
+  });
+
+  const availablePins = jobs
+    .map(job => ({
+      ...job,
+      distanceKm: haversineKm(lat, lng, job.pickupLat, job.pickupLng)
+    }))
+    .filter(job => job.distanceKm <= radiusKm);
+
+  return availablePins;
+}
+
+// ─────────────────────────────────────────────
+// WALLET — WITHDRAW
+// ─────────────────────────────────────────────
+export async function withdrawWallet(userId: string, input: WithdrawInput) {
+  const wallet = await prisma.wallet.findUnique({ where: { userId } });
+  if (!wallet) throw AppError.notFound('Wallet not found');
+  
+  if (wallet.cachedBalance < input.amount) {
+    throw AppError.badRequest('Insufficient balance');
+  }
+
+  const newBalance = wallet.cachedBalance - input.amount;
+
+  const [updatedWallet, transaction] = await prisma.$transaction([
+    prisma.wallet.update({
+      where: { userId },
+      data: { cachedBalance: newBalance },
+    }),
+    prisma.walletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        type: WalletTransactionType.DEBIT,
+        reason: WalletTransactionReason.REFUND,
+        amount: input.amount,
+        balanceAfter: newBalance,
+      }
+    })
+  ]);
+
+  return { wallet: updatedWallet, transaction };
+}
+
+// ─────────────────────────────────────────────
+// JOB HISTORY
+// ─────────────────────────────────────────────
+export async function getJobHistory(userId: string, query: HistoryQuery) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const { status, page, limit } = query;
+  const skip = (page - 1) * limit;
+
+  const where: any = {
+    workerId: worker.id,
+    status: status
+      ? { equals: status as any }
+      : { in: ['COMPLETED', 'CANCELLED'] as any[] },
+  };
+
+  const [assignments, total] = await prisma.$transaction([
+    prisma.jobAssignment.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        payoutAmount: true,
+        acceptedAt: true,
+        completedAt: true,
+        laborType: true,
+        booking: {
+          select: {
+            id: true,
+            bookingNumber: true,
+            pickupAddress: true,
+            dropAddress: true,
+            scheduledAt: true,
+          },
+        },
+      },
+    }),
+    prisma.jobAssignment.count({ where }),
+  ]);
+
+  return {
+    assignments,
+    meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+  };
+}
+
+// ─────────────────────────────────────────────
+// EARNINGS CHART (aggregated by period)
+// ─────────────────────────────────────────────
+export async function getEarningsChart(userId: string, query: EarningsChartQuery) {
+  const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true } });
+  if (!wallet) throw AppError.notFound('Wallet not found');
+
+  const now = new Date();
+  let startDate: Date;
+  if (query.period === 'day') {
+    startDate = new Date(now);
+    startDate.setDate(now.getDate() - 7); // last 7 days
+  } else if (query.period === 'week') {
+    startDate = new Date(now);
+    startDate.setDate(now.getDate() - 28); // last 4 weeks
+  } else {
+    startDate = new Date(now);
+    startDate.setMonth(now.getMonth() - 6); // last 6 months
+  }
+
+  const transactions = await prisma.walletTransaction.findMany({
+    where: {
+      walletId: wallet.id,
+      type: WalletTransactionType.CREDIT,
+      createdAt: { gte: startDate },
+    },
+    select: { amount: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  // Group by bucket
+  const buckets: Record<string, number> = {};
+  for (const tx of transactions) {
+    let key: string;
+    const d = tx.createdAt;
+    if (query.period === 'day') {
+      key = d.toISOString().substring(0, 10); // YYYY-MM-DD
+    } else if (query.period === 'week') {
+      // ISO week label
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      key = weekStart.toISOString().substring(0, 10);
+    } else {
+      key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    buckets[key] = (buckets[key] ?? 0) + tx.amount;
+  }
+
+  const chartData = Object.entries(buckets).map(([label, amount]) => ({ label, amount }));
+
+  return { period: query.period, chartData };
+}
+
+// ─────────────────────────────────────────────
+// PERFORMANCE METRICS
+// ─────────────────────────────────────────────
+export async function getPerformanceMetrics(userId: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: {
+      id: true,
+      rating: true,
+      totalJobs: true,
+      acceptanceRate: true,
+      ratingCount: true,
+    },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const [completed, cancelled] = await prisma.$transaction([
+    prisma.jobAssignment.count({ where: { workerId: worker.id, status: 'COMPLETED' as any } }),
+    prisma.jobAssignment.count({ where: { workerId: worker.id, status: 'CANCELLED' as any } }),
+  ]);
+
+  const completionRate = worker.totalJobs > 0
+    ? Math.round((completed / worker.totalJobs) * 100)
+    : 0;
+
+  const tips: string[] = [];
+  if (worker.acceptanceRate < 80) tips.push('Try to accept more jobs to improve your acceptance rate and get priority dispatch.');
+  if ((worker.rating ?? 5) < 4) tips.push('Ask customers for feedback after each job to improve your rating.');
+  if (completionRate < 90) tips.push('Avoid cancelling accepted jobs — it impacts your priority ranking.');
+  if (tips.length === 0) tips.push('Great work! Keep accepting jobs quickly to maintain your top-tier status.');
+
+  return {
+    rating: worker.rating ?? 5.0,
+    ratingCount: worker.ratingCount ?? 0,
+    totalJobs: worker.totalJobs,
+    completedJobs: completed,
+    cancelledJobs: cancelled,
+    acceptanceRate: worker.acceptanceRate,
+    completionRate,
+    tips,
+  };
+}
+
+// ─────────────────────────────────────────────
+// SAFETY — SOS ALERT
+// ─────────────────────────────────────────────
+export async function triggerSos(userId: string, input: SosInput) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, phone: true, fcmToken: true },
+  });
+  if (!user) throw AppError.notFound('User not found');
+
+  const description = [
+    `🚨 SOS EMERGENCY — Worker: ${user.name ?? 'Unknown'} (${user.phone})`,
+    `Location: lat=${input.lat}, lng=${input.lng}`,
+    `Google Maps: https://maps.google.com/?q=${input.lat},${input.lng}`,
+    input.message ? `Message: ${input.message}` : '',
+  ].filter(Boolean).join('\n');
+
+  // 1. Create a support ticket so Admin sees it immediately on the dashboard
+  const ticket = await prisma.supportTicket.create({
+    data: {
+      userId,
+      subject: '🚨 SOS EMERGENCY ALERT',
+      status: 'OPEN',
+      messages: {
+        create: {
+          senderId: userId,
+          isAgent: false,
+          content: description,
+        },
+      },
+    },
+  });
+
+  // 2. Emit real-time alert to admin namespace
+  emitToWorkerRoom('admin', 'sos_alert', {
+    workerId: userId,
+    workerName: user.name,
+    workerPhone: user.phone,
+    lat: input.lat,
+    lng: input.lng,
+    message: input.message,
+    ticketId: ticket.id,
+    triggeredAt: new Date().toISOString(),
+  });
+
+  logger.warn(`[SAFETY] SOS triggered by worker ${userId} at lat=${input.lat} lng=${input.lng}`);
+
+  return { success: true, ticketId: ticket.id };
+}
+
+// ─────────────────────────────────────────────
+// SAFETY — ALERTS (static/contextual tips)
+// ─────────────────────────────────────────────
+export async function getSafetyAlerts() {
+  // Static safety tips — replace with DB-driven content when available
+  return {
+    safetyScore: 92,
+    alerts: [
+      {
+        id: 'sa_1',
+        type: 'TIP',
+        title: 'Lift with your legs, not your back',
+        body: 'Bend your knees when lifting heavy items. Never twist your spine while holding a load.',
+        icon: 'fitness_center',
+      },
+      {
+        id: 'sa_2',
+        type: 'RULE',
+        title: 'Always wear safety gloves',
+        body: 'Gloves protect you from cuts and splinters when handling boxes and loose materials.',
+        icon: 'back_hand',
+      },
+      {
+        id: 'sa_3',
+        type: 'ALERT',
+        title: 'Stay hydrated on long shifts',
+        body: 'Drink water every 30 minutes during physical work, especially in summer.',
+        icon: 'water_drop',
+      },
+      {
+        id: 'sa_4',
+        type: 'RULE',
+        title: 'Do not work if you feel unwell',
+        body: 'If you are feeling sick or dizzy, mark yourself offline and rest. Your health comes first.',
+        icon: 'health_and_safety',
+      },
+    ],
+  };
+}
+
+// ─────────────────────────────────────────────
+// BADGES (mock — no DB tables yet)
+// ─────────────────────────────────────────────
+export async function getBadges(userId: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: { totalJobs: true, rating: true, acceptanceRate: true },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const { totalJobs, rating, acceptanceRate } = worker;
+
+  // Compute which badges are earned dynamically from real worker stats
+  const badges = [
+    {
+      id: 'first_job',
+      name: 'First Step',
+      description: 'Completed your very first job',
+      icon: '🏅',
+      tier: 'BRONZE',
+      earned: totalJobs >= 1,
+      earnedAt: totalJobs >= 1 ? null : undefined,
+    },
+    {
+      id: 'ten_jobs',
+      name: 'Rising Star',
+      description: 'Completed 10 jobs',
+      icon: '⭐',
+      tier: 'SILVER',
+      earned: totalJobs >= 10,
+    },
+    {
+      id: 'fifty_jobs',
+      name: 'Veteran Loader',
+      description: 'Completed 50 jobs',
+      icon: '🥈',
+      tier: 'GOLD',
+      earned: totalJobs >= 50,
+    },
+    {
+      id: 'hundred_jobs',
+      name: 'Century Club',
+      description: 'Completed 100 jobs',
+      icon: '💯',
+      tier: 'PLATINUM',
+      earned: totalJobs >= 100,
+    },
+    {
+      id: 'high_rating',
+      name: 'Top Rated',
+      description: 'Maintained a rating of 4.8 or above',
+      icon: '⭐',
+      tier: 'GOLD',
+      earned: (rating ?? 0) >= 4.8,
+    },
+    {
+      id: 'high_acceptance',
+      name: 'Reliable Worker',
+      description: 'Maintained an acceptance rate above 90%',
+      icon: '✅',
+      tier: 'SILVER',
+      earned: (acceptanceRate ?? 0) >= 90,
+    },
+  ];
+
+  const earned = badges.filter(b => b.earned);
+  const locked = badges.filter(b => !b.earned);
+
+  // Tier level based on total jobs
+  let tier = 'BRONZE';
+  if (totalJobs >= 100) tier = 'PLATINUM';
+  else if (totalJobs >= 50) tier = 'GOLD';
+  else if (totalJobs >= 10) tier = 'SILVER';
+
+  return { tier, totalEarned: earned.length, earned, locked };
+}
+
+// ─────────────────────────────────────────────
+// TRAINING COURSES (mock — no DB tables yet)
+// ─────────────────────────────────────────────
+export async function getTrainingCourses() {
+  return {
+    courses: [
+      {
+        id: 'tc_1',
+        title: 'Safe Lifting Techniques',
+        description: 'Learn the correct way to lift heavy objects without injuring yourself.',
+        durationMinutes: 15,
+        thumbnail: 'https://cdn.parther.app/training/lifting.jpg',
+        category: 'SAFETY',
+        isCompleted: false,
+        progress: 0,
+        lessons: 4,
+      },
+      {
+        id: 'tc_2',
+        title: 'Customer Service Excellence',
+        description: 'How to communicate professionally with customers during loading/unloading.',
+        durationMinutes: 10,
+        thumbnail: 'https://cdn.parther.app/training/customer.jpg',
+        category: 'SOFT_SKILLS',
+        isCompleted: false,
+        progress: 0,
+        lessons: 3,
+      },
+      {
+        id: 'tc_3',
+        title: 'Using the Parther Worker App',
+        description: 'A complete walkthrough of how to use every feature of the app.',
+        durationMinutes: 8,
+        thumbnail: 'https://cdn.parther.app/training/app.jpg',
+        category: 'ONBOARDING',
+        isCompleted: true,
+        progress: 100,
+        lessons: 2,
+      },
+      {
+        id: 'tc_4',
+        title: 'Handling Fragile & Hazardous Items',
+        description: 'Rules and best practices when dealing with glass, electronics, or chemicals.',
+        durationMinutes: 20,
+        thumbnail: 'https://cdn.parther.app/training/fragile.jpg',
+        category: 'SAFETY',
+        isCompleted: false,
+        progress: 40,
+        lessons: 5,
+      },
+    ],
+  };
+}

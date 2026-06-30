@@ -28,6 +28,7 @@ import { announcementRouter } from '@modules/announcement/announcement.router';
 import { ulipRouter } from '@modules/ulip/ulip.router';
 import { subscriptionRouter } from '@modules/subscription/subscription.router';
 import { adminRouter } from '@modules/admin/admin.router';
+import { workforceRouter } from '@modules/workforce/workforce.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
 
@@ -166,6 +167,7 @@ export function createApp(): Application {
   app.use('/api/v1/ulip', ulipRouter);
   app.use('/api/v1/subscription', subscriptionRouter);
   app.use('/api/v1/admin',        adminRouter);
+  app.use('/api/v1/workforce',    workforceRouter);
 
 
   app.use(notFoundHandler);

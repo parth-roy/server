@@ -11,6 +11,7 @@ import { env } from '@config/env';
 import { logger } from '@shared/logger';
 import { getRedis } from '@config/redis';
 import { setupTrackingGateway } from '@modules/tracking/tracking.gateway';
+import { setupWorkforceGateway } from '@modules/workforce/workforce.gateway';
 import { registerEventListeners } from '@shared/eventbus/listeners';
 import { startAllWorkers } from './workers';
 import { startCleanupJobs } from '@shared/jobs/cleanup.job';
@@ -21,9 +22,9 @@ async function bootstrap() {
   // 1. Test Supabase connection
   try {
     await prisma.$connect();
-    logger.info('✅ Supabase (PostgreSQL) connected');
+    logger.info('✅ PostgreSQL (DigitalOcean) connected');
   } catch (err) {
-    logger.error('❌ Supabase connection failed. Check DATABASE_URL in .env:', err);
+    logger.error('❌ Database connection failed. Check DATABASE_URL in .env:', err);
     process.exit(1);
   }
 
@@ -54,8 +55,9 @@ async function bootstrap() {
   });
   logger.info('Socket.io ready (in-memory mode - no Redis adapter)');
 
-  // 5. Tracking gateway + register socket instance for worker access
+  // 5. Tracking gateway + workforce gateway + register socket instance
   setupTrackingGateway(io);
+  setupWorkforceGateway(io);
   setSocketInstance(io); // Allows ETA worker and other workers to emit socket events
 
   // 5.5. Register event bus listeners (booking.confirmed → dispatch, delivered → coins, etc.)

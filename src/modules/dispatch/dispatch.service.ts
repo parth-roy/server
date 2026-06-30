@@ -1,9 +1,10 @@
 import { prisma } from '@shared/db/prisma';
-import { BookingStatus, DriverStatus, NotificationType } from '@prisma/client';
+import { BookingStatus, DriverStatus, NotificationType, WorkerStatus, WorkerJobStatus, LaborType } from '@prisma/client';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { cancelBookingBySystem } from '@modules/booking/booking.service';
+import { emitToWorkerRoom } from '@shared/socket/socket.instance';
 
 const MAX_DRIVERS_TO_NOTIFY = 5;
 const MAX_SEARCH_RADIUS_KM = 50;
@@ -267,3 +268,175 @@ export async function handleDriverDecline(bookingId: string): Promise<void> {
         );
     }, REDISPATCH_DELAY_MS);
 }
+
+// ─────────────────────────────────────────────
+// DISPATCH WORKERS — called from EventBus on booking.confirmed
+// Finds nearest available, verified workers and creates JobAssignment records.
+// Does NOT touch existing dispatchBooking() at all.
+// ─────────────────────────────────────────────
+
+const MAX_WORKERS_TO_NOTIFY = 10;
+const WORKER_SEARCH_RADIUS_KM = 30;
+const WORKER_PAYOUT_PER_JOB = 150; // ₹150 per worker per job — can be made configurable via DB later
+
+export async function dispatchWorkers(bookingId: string): Promise<void> {
+    const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: {
+            id: true, bookingNumber: true, laborRequired: true, laborersCount: true,
+            laborType: true, laborCharge: true, pickupLat: true, pickupLng: true,
+            pickupAddress: true,
+            stops: { select: { address: true }, take: 1, orderBy: { sequence: 'asc' } },
+        },
+    });
+
+    if (!booking) {
+        logger.warn(`[WorkerDispatch] Booking ${bookingId} not found`);
+        return;
+    }
+    if (!booking.laborRequired) {
+        logger.debug(`[WorkerDispatch] Booking ${bookingId} does not require labor — skipping`);
+        return;
+    }
+
+    const slotsNeeded = booking.laborersCount ?? 1;
+
+    // Build laborType filter: if booking wants LOADING, notify LOADING or BOTH workers
+    let laborTypeFilter: any = {};
+    if (booking.laborType && booking.laborType !== LaborType.BOTH) {
+        laborTypeFilter = {
+            OR: [
+                { preferredTypes: { has: booking.laborType } },
+                { preferredTypes: { has: LaborType.BOTH } },
+                { preferredTypes: { isEmpty: true } }, // Worker with no preference accepts any
+            ],
+        };
+    }
+
+    // Query available, verified workers with GPS coordinates
+    const candidates = await prisma.worker.findMany({
+        where: {
+            status: WorkerStatus.AVAILABLE,
+            isDocVerified: true,
+            isActive: true,
+            currentLat: { not: null },
+            currentLng: { not: null },
+            ...laborTypeFilter,
+            // Exclude workers already notified for this booking
+            jobAssignments: {
+                none: { bookingId },
+            },
+        },
+        select: {
+            id: true,
+            currentLat: true,
+            currentLng: true,
+            rating: true,
+            user: { select: { id: true, fcmToken: true } },
+        },
+    });
+
+    if (candidates.length === 0) {
+        logger.warn(`[WorkerDispatch] No available workers for booking ${booking.bookingNumber}`);
+        return;
+    }
+
+    // Rank by distance (nearest first), tiebreak by rating
+    const ranked = candidates
+        .map(w => ({
+            ...w,
+            distanceKm: haversineKm(w.currentLat!, w.currentLng!, booking.pickupLat, booking.pickupLng),
+        }))
+        .filter(w => w.distanceKm <= WORKER_SEARCH_RADIUS_KM)
+        .sort((a, b) => {
+            const diff = a.distanceKm - b.distanceKm;
+            if (Math.abs(diff) > 2) return diff;
+            return b.rating - a.rating;
+        })
+        .slice(0, MAX_WORKERS_TO_NOTIFY);
+
+    if (ranked.length === 0) {
+        logger.warn(`[WorkerDispatch] No workers within ${WORKER_SEARCH_RADIUS_KM}km for booking ${booking.bookingNumber}`);
+        return;
+    }
+
+    const payoutPerWorker = booking.laborCharge
+        ? Math.round(booking.laborCharge / slotsNeeded)
+        : WORKER_PAYOUT_PER_JOB;
+
+    const dropAddress = booking.stops[0]?.address ?? 'Destination';
+    const notifBody = `₹${payoutPerWorker} • ${booking.pickupAddress} → ${dropAddress}`;
+
+    // Create JobAssignment for each candidate + notify simultaneously
+    await Promise.allSettled(
+        ranked.map(async (worker) => {
+            try {
+                // Upsert to avoid duplicate assignment on re-dispatch
+                const assignment = await prisma.jobAssignment.upsert({
+                    where: { bookingId_workerId: { bookingId, workerId: worker.id } },
+                    create: {
+                        bookingId,
+                        workerId: worker.id,
+                        status: WorkerJobStatus.PENDING_ACCEPTANCE,
+                        payoutAmount: payoutPerWorker,
+                    },
+                    update: {
+                        // On re-dispatch (if DECLINED previously), reset to PENDING
+                        status: WorkerJobStatus.PENDING_ACCEPTANCE,
+                        payoutAmount: payoutPerWorker,
+                        declinedAt: null,
+                        declineReason: null,
+                    },
+                });
+
+                // Skip if already accepted/in-progress
+                if (!['PENDING_ACCEPTANCE'].includes(assignment.status)) {
+                    return;
+                }
+
+                // FCM push
+                if (worker.user.fcmToken) {
+                    await notificationService.sendToDevice(worker.user.fcmToken, {
+                        title: '🏗️ New Job Nearby!',
+                        body: notifBody,
+                        data: {
+                            type: 'NEW_WORKER_JOB',
+                            assignmentId: assignment.id,
+                            bookingId,
+                            payout: String(payoutPerWorker),
+                            distanceKm: String(Math.round(worker.distanceKm * 10) / 10),
+                        },
+                    });
+                }
+
+                // Socket push to worker's personal room
+                emitToWorkerRoom(worker.id, 'new_job_alert', {
+                    assignmentId: assignment.id,
+                    bookingId,
+                    bookingNumber: booking.bookingNumber,
+                    payoutAmount: payoutPerWorker,
+                    laborType: booking.laborType,
+                    pickupAddress: booking.pickupAddress,
+                    dropAddress,
+                    distanceKm: Math.round(worker.distanceKm * 10) / 10,
+                    slotsTotal: slotsNeeded,
+                });
+
+                await createNotification(
+                    worker.user.id,
+                    '🏗️ New Job Nearby!',
+                    notifBody,
+                    NotificationType.BOOKING_STATUS,
+                    bookingId,
+                );
+
+                logger.info(`[WorkerDispatch] Notified worker ${worker.id} (${Math.round(worker.distanceKm * 10) / 10}km) for booking ${booking.bookingNumber}`);
+            } catch (err) {
+                logger.error(`[WorkerDispatch] Failed to notify worker ${worker.id}:`, err);
+            }
+        }),
+    );
+
+    logger.info(`[WorkerDispatch] Booking ${booking.bookingNumber} dispatched to ${ranked.length} workers (${slotsNeeded} slots needed)`);
+}
+
