@@ -43,3 +43,14 @@ export function emitToDriverRoom(driverId: string, event: string, data: object):
     socketInstance.of('/tracking').to(`driver_${driverId}`).emit(event, data);
 }
 
+/**
+ * Emit an event to a specific worker's personal room.
+ * Workers join the room `worker_{workerId}` on connection in the workforce gateway.
+ * Used by dispatch to push new job alerts directly to individual workers.
+ */
+export function emitToWorkerRoom(workerId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/workforce').to(`worker_${workerId}`).emit(event, data);
+}
+
+

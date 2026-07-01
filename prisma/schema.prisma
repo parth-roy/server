@@ -19,6 +19,7 @@ enum UserRole {
   DRIVER
   FLEET_OWNER
   ADMIN
+  WORKER
 }
 
 enum SubscriptionPlan {
@@ -115,6 +116,32 @@ enum SupportTicketStatus {
 }
 
 // ─────────────────────────────────────────────
+// WORKFORCE ENUMS
+// ─────────────────────────────────────────────
+
+enum WorkerStatus {
+  OFFLINE
+  AVAILABLE
+  ON_JOB
+}
+
+enum WorkerJobStatus {
+  PENDING_ACCEPTANCE  // Notified, awaiting worker response
+  ACCEPTED            // Worker accepted and is heading to location
+  ARRIVED             // Worker has arrived at the site
+  IN_PROGRESS         // Work has started
+  COMPLETED           // Job done and OTP verified
+  DECLINED            // Worker declined this job
+  CANCELLED           // Job cancelled before completion
+}
+
+enum LaborType {
+  LOADING
+  UNLOADING
+  BOTH
+}
+
+// ─────────────────────────────────────────────
 // USER & AUTH
 // ─────────────────────────────────────────────
 
@@ -147,6 +174,7 @@ model User {
   gstDetails     GstDetail[]
   supportTickets SupportTicket[]
   driver         Driver?
+  worker         Worker?
   fleetOwner     FleetOwner?
   refreshTokens  RefreshToken[]
 
@@ -274,6 +302,81 @@ model Driver {
   @@index([status])
   @@index([status, isDocVerified, isActive])
   @@map("drivers")
+}
+
+// ─────────────────────────────────────────────
+// WORKFORCE — Worker & JobAssignment
+// ─────────────────────────────────────────────
+
+model Worker {
+  id             String       @id @default(uuid())
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isActive       Boolean      @default(true)
+  isDocVerified  Boolean      @default(false) // true = admin approved both Aadhaar + PAN
+  status         WorkerStatus @default(OFFLINE)
+  rating         Float        @default(5.0)
+  totalJobs      Int          @default(0)
+  acceptanceRate Float        @default(100.0) // Percentage 0-100; recalculated on each accept/decline
+  currentLat     Float?
+  currentLng     Float?
+  lastLocationAt DateTime?
+
+  // Skills & capacity
+  maxWeightKg    Float        @default(100.0)  // Max lifting capacity declared by worker
+  preferredTypes LaborType[]                   // What types of jobs this worker wants
+
+  // Payout / bank details
+  bankAccountNo  String?
+  bankIfsc       String?
+  bankName       String?
+
+  // KYC documents (S3 URLs)
+  aadhaarUrl     String?
+  panUrl         String?
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  jobAssignments JobAssignment[]
+
+  @@index([status])
+  @@index([status, isDocVerified, isActive])
+  @@map("workers")
+}
+
+model JobAssignment {
+  id           String          @id @default(uuid())
+  bookingId    String
+  booking      Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  workerId     String
+  worker       Worker          @relation(fields: [workerId], references: [id])
+  status       WorkerJobStatus @default(PENDING_ACCEPTANCE)
+
+  // Payment — always platform-calculated, NEVER worker-supplied
+  payoutAmount Float
+
+  // Completion OTP — set when worker taps "Request Completion"; customer provides to worker
+  completionOtp String?
+  otpExpiresAt  DateTime?
+
+  // Lifecycle timestamps
+  arrivedAt    DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  declinedAt   DateTime?
+
+  declineReason String?  // Optional reason for declining
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // A worker can only be assigned once per booking
+  @@unique([bookingId, workerId])
+  @@index([bookingId])
+  @@index([workerId, status])
+  @@index([status])
+  @@map("job_assignments")
 }
 
 // ── Driver Subscription ──────────────────────────────────────────────────────
@@ -460,17 +563,26 @@ model Booking {
   truckAssignment TruckAssignment?
   locationHistory BookingLocationHistory[]
   bids            Bid[]
+  jobAssignments  JobAssignment[]
 
   // Insurance
   insuranceOpted    Boolean @default(false)
   insuranceProvider String?
   insuranceAmount   Float?
 
+  // ── Workforce Labor Fields ──────────────────────────────────────────────
+  // All nullable/defaulted so zero impact on existing bookings
+  laborRequired  Boolean    @default(false) // Does this booking need loading/unloading workers?
+  laborersCount  Int?                       // How many workers are needed (e.g., 3)
+  laborType      LaborType?                 // LOADING | UNLOADING | BOTH
+  laborCharge    Float?                     // Platform-calculated payout per worker × count
+
   @@index([status])
   @@index([customerId, status])
   @@index([driverId, status])
   @@index([paymentStatus])
   @@index([createdAt])
+  @@index([laborRequired, status])          // Speeds up workforce job-feed queries
   @@map("bookings")
 }
 
