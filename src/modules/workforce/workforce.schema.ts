@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 export const SendOtpSchema = z.object({
   phone: z.string().regex(/^[6-9]\d{9}$/, 'Invalid Indian phone number'),
+  fcmToken: z.string().optional(),
 });
 
 export const VerifyOtpSchema = z.object({

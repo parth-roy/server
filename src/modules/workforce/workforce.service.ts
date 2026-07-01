@@ -91,11 +91,16 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string }>
   if (env.NODE_ENV !== 'production') {
     logger.info(`[Workforce OTP] Dev OTP for ${input.phone}: ${otp}`);
   } else {
-    // Best-effort FCM: find existing user if any and send as data message
-    const user = await prisma.user.findUnique({ where: { phone: input.phone }, select: { fcmToken: true } });
-    if (user?.fcmToken) {
+    // Best-effort FCM: use provided token or find existing user
+    let token = input.fcmToken;
+    if (!token) {
+      const user = await prisma.user.findUnique({ where: { phone: input.phone }, select: { fcmToken: true } });
+      token = user?.fcmToken || undefined;
+    }
+
+    if (token) {
       try {
-        await notificationService.sendToDevice(user.fcmToken, {
+        await notificationService.sendToDevice(token, {
           title: 'Your OTP',
           body: `Your GoMyTruck Workforce OTP is ${otp}. Valid for 5 minutes.`,
           data: { type: 'WORKFORCE_OTP', otp },
