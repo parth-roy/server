@@ -1074,7 +1074,6 @@ export async function getPerformanceMetrics(userId: string) {
       rating: true,
       totalJobs: true,
       acceptanceRate: true,
-      ratingCount: true,
     },
   });
   if (!worker) throw AppError.notFound('Worker not found');
@@ -1096,7 +1095,7 @@ export async function getPerformanceMetrics(userId: string) {
 
   return {
     rating: worker.rating ?? 5.0,
-    ratingCount: worker.ratingCount ?? 0,
+    ratingCount: 0,
     totalJobs: worker.totalJobs,
     completedJobs: completed,
     cancelledJobs: cancelled,
