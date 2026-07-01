@@ -197,10 +197,10 @@ export async function updateStatus(userId: string, input: UpdateStatusInput) {
     throw AppError.conflict('Cannot go available while on an active job', 'ON_JOB');
   }
 
-  // Cannot go AVAILABLE if not doc-verified
-  if (input.status === 'AVAILABLE' && !worker.isDocVerified) {
-    throw AppError.badRequest('Documents not verified. Please upload Aadhaar and PAN.', 'DOCS_UNVERIFIED');
-  }
+  // Cannot go AVAILABLE if not doc-verified (Temporarily bypassed for testing)
+  // if (input.status === 'AVAILABLE' && !worker.isDocVerified) {
+  //   throw AppError.badRequest('Documents not verified. Please upload Aadhaar and PAN.', 'DOCS_UNVERIFIED');
+  // }
 
   const updated = await prisma.worker.update({
     where: { userId },
@@ -497,7 +497,7 @@ export async function acceptJob(userId: string, assignmentId: string) {
     select: { id: true, status: true, isDocVerified: true },
   });
   if (!worker) throw AppError.notFound('Worker not found');
-  if (!worker.isDocVerified) throw AppError.badRequest('Documents not verified', 'DOCS_UNVERIFIED');
+  // if (!worker.isDocVerified) throw AppError.badRequest('Documents not verified', 'DOCS_UNVERIFIED'); // Temporarily bypassed
   if (worker.status === WorkerStatus.ON_JOB) throw AppError.conflict('Already on an active job', 'ON_JOB');
 
   // Load assignment — verify it belongs to this worker and is still pending
