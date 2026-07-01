@@ -293,7 +293,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
         create: {
           userId: user.id,
           companyName: 'Demo Fleet LLC',
-          isDocVerified: true,
+          isVerified: true,
         }
       });
     }
