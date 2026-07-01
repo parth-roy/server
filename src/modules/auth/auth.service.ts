@@ -273,6 +273,32 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     },
   });
 
+  // ── Auto-provision demo profiles to prevent 404s ──
+  if (demoInfo) {
+    if (demoInfo.role === 'DRIVER') {
+      await prisma.driver.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: {
+          userId: user.id,
+          licenseNumber: `DL-DEMO-${phone.substring(6)}`,
+          isDocVerified: true,
+          status: 'OFFLINE',
+        }
+      });
+    } else if (demoInfo.role === 'FLEET_OWNER') {
+      await prisma.fleetOwner.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: {
+          userId: user.id,
+          companyName: 'Demo Fleet LLC',
+          isDocVerified: true,
+        }
+      });
+    }
+  }
+
   // Issue token pair
   const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, user.role);
 
