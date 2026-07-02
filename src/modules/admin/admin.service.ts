@@ -432,7 +432,11 @@ export async function getUserById(id: string) {
 }
 
 export async function toggleUserStatus(userId: string, isActive: boolean) {
-  return prisma.user.update({ where: { id: userId }, data: { isActive } });
+  const user = await prisma.user.update({ where: { id: userId }, data: { isActive } });
+  if (!isActive) {
+    await forceLogoutAllSessions(userId);
+  }
+  return user;
 }
 
 export async function forceLogoutAllSessions(userId: string) {
@@ -537,7 +541,13 @@ export async function setDriverDocVerified(driverId: string, input: DocVerifiedI
   const driver = await prisma.driver.findUnique({ where: { id: driverId }, include: { user: true } });
   if (!driver) throw AppError.notFound('Driver not found');
 
-  await prisma.driver.update({ where: { id: driverId }, data: { isDocVerified: input.isDocVerified } });
+  await prisma.driver.update({ 
+    where: { id: driverId }, 
+    data: { 
+      isDocVerified: input.isDocVerified,
+      status: input.isDocVerified ? undefined : 'OFFLINE'
+    } 
+  });
 
   if (input.isDocVerified && driver.user.fcmToken) {
     await notificationService.sendToDevice(driver.user.fcmToken, {

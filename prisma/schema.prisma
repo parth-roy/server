@@ -1,13 +1,15 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pg_trgm]
   // directUrl bypasses pgBouncer for migrations
-  // This is the correct Supabase + Prisma setup
+  // This is the correct setup
 }
 
 // ─────────────────────────────────────────────
@@ -34,10 +36,10 @@ enum VehicleType {
   THREE_WHEELER
   TATA_ACE
   MINI_TRUCK
-  TRUCK_14FT      // Tata 407, 3–4 ton payload
-  TRUCK_17FT      // 6–7 ton payload
-  TRUCK_20FT      // 7–9 ton payload
-  CONTAINER_32FT  // 32ft container, 15–18 ton payload
+  TRUCK_14FT // Tata 407, 3–4 ton payload
+  TRUCK_17FT // 6–7 ton payload
+  TRUCK_20FT // 7–9 ton payload
+  CONTAINER_32FT // 32ft container, 15–18 ton payload
 }
 
 enum BookingStatus {
@@ -102,9 +104,9 @@ enum DocumentStatus {
 
 // ULIP verification status — covers DL (SARATHI) and RC (VAHAN) checks
 enum UlipVerifStatus {
-  PENDING       // Not yet submitted
-  VERIFIED      // Government confirmed — data matches
-  FAILED        // Government returned mismatch / not found
+  PENDING // Not yet submitted
+  VERIFIED // Government confirmed — data matches
+  FAILED // Government returned mismatch / not found
   MANUAL_REVIEW // DL/RC not in SARATHI/VAHAN (pre-digital) — admin reviews physical doc
 }
 
@@ -126,13 +128,13 @@ enum WorkerStatus {
 }
 
 enum WorkerJobStatus {
-  PENDING_ACCEPTANCE  // Notified, awaiting worker response
-  ACCEPTED            // Worker accepted and is heading to location
-  ARRIVED             // Worker has arrived at the site
-  IN_PROGRESS         // Work has started
-  COMPLETED           // Job done and OTP verified
-  DECLINED            // Worker declined this job
-  CANCELLED           // Job cancelled before completion
+  PENDING_ACCEPTANCE // Notified, awaiting worker response
+  ACCEPTED // Worker accepted and is heading to location
+  ARRIVED // Worker has arrived at the site
+  IN_PROGRESS // Work has started
+  COMPLETED // Job done and OTP verified
+  DECLINED // Worker declined this job
+  CANCELLED // Job cancelled before completion
 }
 
 enum LaborType {
@@ -163,9 +165,9 @@ model User {
   // passwordHash: argon2id hash of the admin password.
   // passwordResetToken: single-use UUID token stored as plain text (emailed as link).
   // passwordResetExpiry: token expires after 1 hour.
-  passwordHash         String?   // argon2id hash — only set for ADMIN role users
-  passwordResetToken   String?   @unique // UUID sent in Zoho reset email
-  passwordResetExpiry  DateTime? // 1-hour window to use the reset link
+  passwordHash        String? // argon2id hash — only set for ADMIN role users
+  passwordResetToken  String?   @unique // UUID sent in Zoho reset email
+  passwordResetExpiry DateTime? // 1-hour window to use the reset link
 
   addresses      SavedAddress[]
   bookings       Booking[]       @relation("CustomerBookings")
@@ -183,8 +185,11 @@ model User {
   profileComplete Boolean @default(false)
 
   // Enterprise specific relations
-  teamMembers     TeamMember[] @relation("EnterpriseTeamMembers")
+  teamMembers TeamMember[] @relation("EnterpriseTeamMembers")
 
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("users")
 }
 
@@ -221,14 +226,14 @@ model SavedAddress {
 }
 
 model RecentSearch {
-  id          String   @id @default(uuid())
-  userId      String?
-  placeId     String
-  address     String
-  latitude    Float
-  longitude   Float
-  searchType  String   @default("pickup") // "pickup" or "drop"
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String?
+  placeId    String
+  address    String
+  latitude   Float
+  longitude  Float
+  searchType String   @default("pickup") // "pickup" or "drop"
+  createdAt  DateTime @default(now())
 
   @@index([userId, createdAt])
   @@map("recent_searches")
@@ -271,7 +276,7 @@ model Driver {
   userId         String       @unique
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   licenseNumber  String       @unique
-  vehicleId      String?      @unique  // Optional until vehicle is registered
+  vehicleId      String?      @unique // Optional until vehicle is registered
   vehicle        Vehicle?     @relation(fields: [vehicleId], references: [id])
   status         DriverStatus @default(OFFLINE)
   rating         Float        @default(5.0)
@@ -285,12 +290,12 @@ model Driver {
   updatedAt      DateTime     @updatedAt
 
   // ── ULIP SARATHI (Driving License) fields ──────────────
-  dlNumber             String?          // DL number as submitted by driver
-  dob                  DateTime?        // Date of birth (yyyy-mm-dd) for SARATHI match
-  permitTypes          String?          // Comma-separated: "LMV,HMV"
-  dlVerifStatus        UlipVerifStatus  @default(PENDING)
-  dlVerifiedAt         DateTime?
-  dlUlipRawResponse    Json?            // Raw SARATHI JSON response — legal audit trail
+  dlNumber          String? // DL number as submitted by driver
+  dob               DateTime? // Date of birth (yyyy-mm-dd) for SARATHI match
+  permitTypes       String? // Comma-separated: "LMV,HMV"
+  dlVerifStatus     UlipVerifStatus @default(PENDING)
+  dlVerifiedAt      DateTime?
+  dlUlipRawResponse Json? // Raw SARATHI JSON response — legal audit trail
 
   bookings         Booking[]
   documents        DriverDocument[]
@@ -301,6 +306,7 @@ model Driver {
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
+  @@index([licenseNumber(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("drivers")
 }
 
@@ -323,20 +329,20 @@ model Worker {
   lastLocationAt DateTime?
 
   // Skills & capacity
-  maxWeightKg    Float        @default(100.0)  // Max lifting capacity declared by worker
-  preferredTypes LaborType[]                   // What types of jobs this worker wants
+  maxWeightKg    Float       @default(100.0) // Max lifting capacity declared by worker
+  preferredTypes LaborType[] // What types of jobs this worker wants
 
   // Payout / bank details
-  bankAccountNo  String?
-  bankIfsc       String?
-  bankName       String?
+  bankAccountNo String?
+  bankIfsc      String?
+  bankName      String?
 
   // KYC documents (S3 URLs)
-  aadhaarUrl     String?
-  panUrl         String?
+  aadhaarUrl String?
+  panUrl     String?
 
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   jobAssignments JobAssignment[]
 
@@ -346,12 +352,12 @@ model Worker {
 }
 
 model JobAssignment {
-  id           String          @id @default(uuid())
-  bookingId    String
-  booking      Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  workerId     String
-  worker       Worker          @relation(fields: [workerId], references: [id])
-  status       WorkerJobStatus @default(PENDING_ACCEPTANCE)
+  id        String          @id @default(uuid())
+  bookingId String
+  booking   Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  workerId  String
+  worker    Worker          @relation(fields: [workerId], references: [id])
+  status    WorkerJobStatus @default(PENDING_ACCEPTANCE)
 
   // Payment — always platform-calculated, NEVER worker-supplied
   payoutAmount Float
@@ -361,15 +367,15 @@ model JobAssignment {
   otpExpiresAt  DateTime?
 
   // Lifecycle timestamps
-  arrivedAt    DateTime?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  declinedAt   DateTime?
+  arrivedAt   DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
 
-  declineReason String?  // Optional reason for declining
+  declineReason String? // Optional reason for declining
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // A worker can only be assigned once per booking
   @@unique([bookingId, workerId])
@@ -384,22 +390,22 @@ model JobAssignment {
 // Payment gateway integration will update paymentReference and status.
 
 model DriverSubscription {
-  id               String           @id @default(uuid())
-  driverId         String           @unique
-  driver           Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  driverId String @unique
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
 
-  plan             SubscriptionPlan
-  pricePerMonth    Int              // In INR paise (e.g. 99900 = ₹999)
-  startDate        DateTime         @default(now())
-  endDate          DateTime         // 30 days from startDate by default
-  isActive         Boolean          @default(true)
+  plan          SubscriptionPlan
+  pricePerMonth Int // In INR paise (e.g. 99900 = ₹999)
+  startDate     DateTime         @default(now())
+  endDate       DateTime // 30 days from startDate by default
+  isActive      Boolean          @default(true)
 
   // Payment tracking — populated by payment gateway webhook
-  paymentReference String?          // Razorpay/UPI transaction ID
-  paymentMethod    String?          // 'razorpay' | 'upi' | 'mock'
+  paymentReference String? // Razorpay/UPI transaction ID
+  paymentMethod    String? // 'razorpay' | 'upi' | 'mock'
 
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("driver_subscriptions")
 }
@@ -418,12 +424,12 @@ model Vehicle {
   createdAt      DateTime    @default(now())
 
   // ── ULIP VAHAN (Registration Certificate) fields ───────
-  ownerName            String?          // Owner name as submitted (must match VAHAN)
-  chassisNumber        String?          // Chassis number (optional — one of three required)
-  engineNumber         String?          // Engine number (optional — one of three required)
-  rcVerifStatus        UlipVerifStatus  @default(PENDING)
-  rcVerifiedAt         DateTime?
-  rcUlipRawResponse    Json?            // Raw VAHAN JSON response — legal audit trail
+  ownerName         String? // Owner name as submitted (must match VAHAN)
+  chassisNumber     String? // Chassis number (optional — one of three required)
+  engineNumber      String? // Engine number (optional — one of three required)
+  rcVerifStatus     UlipVerifStatus @default(PENDING)
+  rcVerifiedAt      DateTime?
+  rcUlipRawResponse Json? // Raw VAHAN JSON response — legal audit trail
 
   driver Driver?
 
@@ -437,15 +443,15 @@ model Vehicle {
 // This is the legal proof of what the government returned.
 // Required for compliance, dispute resolution, and auditing.
 model VerificationLog {
-  id          String   @id @default(uuid())
-  entityType  String   // "driver" | "vehicle"
-  entityId    String   // driverId or vehicleId
-  apiCalled   String   // "AUTHAPI/02" (VAHAN) | "AUTHAPI/03" (SARATHI)
-  requestBody Json     // What we sent to ULIP (without credentials)
-  response    Json     // What ULIP returned
+  id          String          @id @default(uuid())
+  entityType  String // "driver" | "vehicle"
+  entityId    String // driverId or vehicleId
+  apiCalled   String // "AUTHAPI/02" (VAHAN) | "AUTHAPI/03" (SARATHI)
+  requestBody Json // What we sent to ULIP (without credentials)
+  response    Json // What ULIP returned
   status      UlipVerifStatus
-  calledAt    DateTime @default(now())
-  calledBy    String   // userId of the driver who triggered this
+  calledAt    DateTime        @default(now())
+  calledBy    String // userId of the driver who triggered this
 
   @@index([entityId, entityType])
   @@index([calledAt])
@@ -510,39 +516,39 @@ model Booking {
 
   status BookingStatus @default(DRAFT)
 
-  estimatedDistance  Float?
-  estimatedDuration  Int?
-  estimatedPickupEta Int?       // Minutes from booking creation (static, set at booking time)
+  estimatedDistance   Float?
+  estimatedDuration   Int?
+  estimatedPickupEta  Int? // Minutes from booking creation (static, set at booking time)
   // ── Live ETA (updated every 60s by ETA worker while driver is en-route) ──
-  etaMinutes         Int?       // Current live ETA in minutes to pickup
+  etaMinutes          Int? // Current live ETA in minutes to pickup
   etaLastCalculatedAt DateTime? // When ETA was last recalculated by the worker
-  etaLastDriverLat   Float?     // Driver lat when ETA was last calculated (movement filter)
-  etaLastDriverLng   Float?     // Driver lng when ETA was last calculated
-  actualPickupTime   DateTime?
-  actualDeliveryTime DateTime?
+  etaLastDriverLat    Float? // Driver lat when ETA was last calculated (movement filter)
+  etaLastDriverLng    Float? // Driver lng when ETA was last calculated
+  actualPickupTime    DateTime?
+  actualDeliveryTime  DateTime?
 
   baseFare        Float?
   distanceFare    Float?
-  timeFare        Float?          // Congestion/time charge component
-  fuelSurcharge   Float?          // Dynamic fuel surcharge amount
+  timeFare        Float? // Congestion/time charge component
+  fuelSurcharge   Float? // Dynamic fuel surcharge amount
   loadingCharge   Float?
-  surgeMultiplier Float           @default(1.0)
-  coinsRedeemed   Float           @default(0)
-  discountAmount  Float           @default(0)
+  surgeMultiplier Float  @default(1.0)
+  coinsRedeemed   Float  @default(0)
+  discountAmount  Float  @default(0)
   taxAmount       Float?
-  gstAmount       Float?          // Total GST on this booking
-  waitingCharge   Float?          // Waiting charge accrued at pickup
-  tollCharge      Float?          // Actual toll charges (FASTag or manual)
-  totalFare       Float?          // Before GST
-  grandTotal      Float?          // totalFare + gstAmount + waitingCharge + tollCharge
+  gstAmount       Float? // Total GST on this booking
+  waitingCharge   Float? // Waiting charge accrued at pickup
+  tollCharge      Float? // Actual toll charges (FASTag or manual)
+  totalFare       Float? // Before GST
+  grandTotal      Float? // totalFare + gstAmount + waitingCharge + tollCharge
 
   // Timing for waiting charge calculation
-  arrivalTime     DateTime?       // When driver marked DRIVER_ARRIVING
+  arrivalTime DateTime? // When driver marked DRIVER_ARRIVING
 
   paymentStatus   PaymentStatus  @default(PENDING)
   paymentMethod   PaymentMethod?
   paymentRef      String?
-  razorpayOrderId String?        // Stored on createOrder; verified in verifyPayment to prevent replay attacks
+  razorpayOrderId String? // Stored on createOrder; verified in verifyPayment to prevent replay attacks
   declineCount    Int            @default(0) // Incremented on each driver decline; triggers re-dispatch
 
   customerRating Float?
@@ -572,17 +578,17 @@ model Booking {
 
   // ── Workforce Labor Fields ──────────────────────────────────────────────
   // All nullable/defaulted so zero impact on existing bookings
-  laborRequired  Boolean    @default(false) // Does this booking need loading/unloading workers?
-  laborersCount  Int?                       // How many workers are needed (e.g., 3)
-  laborType      LaborType?                 // LOADING | UNLOADING | BOTH
-  laborCharge    Float?                     // Platform-calculated payout per worker × count
+  laborRequired Boolean    @default(false) // Does this booking need loading/unloading workers?
+  laborersCount Int? // How many workers are needed (e.g., 3)
+  laborType     LaborType? // LOADING | UNLOADING | BOTH
+  laborCharge   Float? // Platform-calculated payout per worker × count
 
   @@index([status])
   @@index([customerId, status])
   @@index([driverId, status])
   @@index([paymentStatus])
   @@index([createdAt])
-  @@index([laborRequired, status])          // Speeds up workforce job-feed queries
+  @@index([laborRequired, status]) // Speeds up workforce job-feed queries
   @@map("bookings")
 }
 
@@ -735,34 +741,34 @@ model SupportMessage {
 // ─────────────────────────────────────────────
 
 model VehicleTypePricing {
-  id           String      @id @default(uuid())
-  vehicleType  VehicleType @unique
-  displayName  String
-  isActive     Boolean     @default(true)
+  id          String      @id @default(uuid())
+  vehicleType VehicleType @unique
+  displayName String
+  isActive    Boolean     @default(true)
 
   // ── Core pricing ──────────────────────────────────────────────────────────
-  baseFare        Float           // Fixed initiation charge (covers dispatch + deadhead)
-  baseIncludesKm  Float           @default(3.0)  // Km included in base fare
-  pricePerKm      Float           // Per-km charge beyond base
-  minFare         Float           // Minimum total fare (floor)
+  baseFare       Float // Fixed initiation charge (covers dispatch + deadhead)
+  baseIncludesKm Float @default(3.0) // Km included in base fare
+  pricePerKm     Float // Per-km charge beyond base
+  minFare        Float // Minimum total fare (floor)
 
   // ── Vehicle specs ─────────────────────────────────────────────────────────
-  capacityKg      Float
-  capacityDesc    String
-  estimatedEta    Int             // Minutes to pickup (display only)
-  imageUrl        String?
+  capacityKg   Float
+  capacityDesc String
+  estimatedEta Int // Minutes to pickup (display only)
+  imageUrl     String?
 
   // ── Time / congestion charge (BR-003) ─────────────────────────────────────
-  timeFreeMinutes    Int   @default(30)   // Free minutes before congestion charge
-  timeChargePerMin   Float @default(1.50) // ₹/min congestion charge
+  timeFreeMinutes  Int   @default(30) // Free minutes before congestion charge
+  timeChargePerMin Float @default(1.50) // ₹/min congestion charge
 
   // ── Waiting charges (BR-006) ──────────────────────────────────────────────
-  waitingFreeMinutes     Int   @default(30)   // Free loading/unloading window
-  waitingChargePerBlock  Float @default(100)  // ₹ per 30-min block after free window
+  waitingFreeMinutes    Int   @default(30) // Free loading/unloading window
+  waitingChargePerBlock Float @default(100) // ₹ per 30-min block after free window
 
   // ── Loading service (BR-008) ──────────────────────────────────────────────
-  loadingChargePerHelper Float @default(400)  // ₹ per manual helper
-  maxHelpers             Int   @default(2)    // Max helpers allowed for this vehicle
+  loadingChargePerHelper Float @default(400) // ₹ per manual helper
+  maxHelpers             Int   @default(2) // Max helpers allowed for this vehicle
 
   // ── Economics (for MPP enforcement — BR-013) ──────────────────────────────
   tcoPerKm Float @default(15.0) // Total Cost of Ownership per km (West Bengal 2026)
@@ -786,7 +792,7 @@ model PricingConfig {
   value       String
   description String
   updatedAt   DateTime @updatedAt
-  updatedBy   String?  // Admin userId who last changed this
+  updatedBy   String? // Admin userId who last changed this
 
   @@map("pricing_config")
 }
@@ -798,45 +804,45 @@ model PricingConfig {
 // NEVER delete rows. Minimum 5-year retention.
 // ─────────────────────────────────────────────
 model PricingAuditLog {
-  id          String      @id @default(uuid())
-  bookingId   String?     // null for estimate-only calls
+  id        String  @id @default(uuid())
+  bookingId String? // null for estimate-only calls
 
   vehicleType VehicleType
 
   // Inputs
-  pickupLat   Float
-  pickupLng   Float
-  dropLat     Float
-  dropLng     Float
+  pickupLat Float
+  pickupLng Float
+  dropLat   Float
+  dropLng   Float
 
   // Intermediate values
-  distanceKm        Float
-  durationMinutes   Int
-  baseFare          Float
-  distanceFare      Float
-  timeFare          Float           @default(0)
-  fuelSurcharge     Float           @default(0)
-  surgeMultiplier   Float           @default(1.0)
-  loadingCharge     Float           @default(0)
-  insuranceCharge   Float           @default(0)
+  distanceKm      Float
+  durationMinutes Int
+  baseFare        Float
+  distanceFare    Float
+  timeFare        Float @default(0)
+  fuelSurcharge   Float @default(0)
+  surgeMultiplier Float @default(1.0)
+  loadingCharge   Float @default(0)
+  insuranceCharge Float @default(0)
 
   // Outputs
-  subtotal          Float
-  totalFare         Float
-  freightGst        Float           @default(0)
-  loadingGst        Float           @default(0)
-  insuranceGst      Float           @default(0)
-  totalGst          Float           @default(0)
-  grandTotal        Float
-  commissionRate    Float
-  commissionAmount  Float
-  driverPayout      Float
-  subsidyAmount     Float           @default(0)
+  subtotal         Float
+  totalFare        Float
+  freightGst       Float @default(0)
+  loadingGst       Float @default(0)
+  insuranceGst     Float @default(0)
+  totalGst         Float @default(0)
+  grandTotal       Float
+  commissionRate   Float
+  commissionAmount Float
+  driverPayout     Float
+  subsidyAmount    Float @default(0)
 
   // Metadata
-  source            String          // "estimate" | "booking_confirm" | "admin"
-  distanceSource    String          @default("mapbox") // "mapbox" | "haversine_fallback"
-  calculatedAt      DateTime        @default(now())
+  source         String // "estimate" | "booking_confirm" | "admin"
+  distanceSource String   @default("mapbox") // "mapbox" | "haversine_fallback"
+  calculatedAt   DateTime @default(now())
 
   @@index([bookingId])
   @@index([vehicleType, calculatedAt])
@@ -850,17 +856,17 @@ model PricingAuditLog {
 // or actively subsidized a trip to meet driver MPP floor.
 // ─────────────────────────────────────────────
 model DriverPayoutSubsidy {
-  id                 String   @id @default(uuid())
-  bookingId          String?
-  vehicleType        String
-  distanceKm         Float
-  originalCommission Float
+  id                  String   @id @default(uuid())
+  bookingId           String?
+  vehicleType         String
+  distanceKm          Float
+  originalCommission  Float
   effectiveCommission Float
-  subsidyAmount      Float
-  totalFare          Float
-  driverPayout       Float
-  reason             String   // "MPP_FLOOR" | "ADMIN_PROMO" | "MARKET_ENTRY"
-  createdAt          DateTime @default(now())
+  subsidyAmount       Float
+  totalFare           Float
+  driverPayout        Float
+  reason              String // "MPP_FLOOR" | "ADMIN_PROMO" | "MARKET_ENTRY"
+  createdAt           DateTime @default(now())
 
   @@index([createdAt])
   @@map("driver_payout_subsidy")
@@ -876,12 +882,12 @@ model DriverPayoutSubsidy {
 // ─────────────────────────────────────────────
 model ServiceabilityConfig {
   id           String   @id @default(uuid())
-  level        String   // "COUNTRY" | "STATE" | "CITY" | "PINCODE" | "ZONE"
-  value        String   // "in" | "IN-WB" | "Kolkata" | "700001"
-  displayName  String   // "India" | "West Bengal" | "Kolkata"
+  level        String // "COUNTRY" | "STATE" | "CITY" | "PINCODE" | "ZONE"
+  value        String // "in" | "IN-WB" | "Kolkata" | "700001"
+  displayName  String // "India" | "West Bengal" | "Kolkata"
   isAllowed    Boolean  @default(true)
-  vehicleTypes String?  // JSON array ["BIKE","TATA_ACE"] — null means all types
-  note         String?  // Admin note for why this rule exists
+  vehicleTypes String? // JSON array ["BIKE","TATA_ACE"] — null means all types
+  note         String? // Admin note for why this rule exists
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -922,7 +928,7 @@ model UserNotification {
   title       String
   body        String
   type        NotificationType @default(SYSTEM)
-  referenceId String?          // bookingId, paymentId, etc.
+  referenceId String? // bookingId, paymentId, etc.
   isRead      Boolean          @default(false)
   createdAt   DateTime         @default(now())
 
@@ -947,13 +953,13 @@ model FleetOwner {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  trucks      FleetTruck[]
+  trucks       FleetTruck[]
   fleetDrivers FleetDriver[]
-  wallet      FleetWallet?
-  earnings    FleetEarning[]
-  assignments TruckAssignment[]
-  maintenance FleetMaintenance[]
-  fuelLogs    FleetFuelLog[]
+  wallet       FleetWallet?
+  earnings     FleetEarning[]
+  assignments  TruckAssignment[]
+  maintenance  FleetMaintenance[]
+  fuelLogs     FleetFuelLog[]
 
   @@map("fleet_owners")
 }
@@ -989,22 +995,22 @@ model FleetTruck {
   currentDriver   FleetDriver? @relation("CurrentTruckDriver", fields: [currentDriverId], references: [id])
 
   // Compliance documents
-  rcDocUrl          String?
-  insuranceDocUrl   String?
-  fitnessDocUrl     String?
-  pucDocUrl         String?
-  permitDocUrl      String?
-  insuranceExpiry   DateTime?
-  fitnessExpiry     DateTime?
-  pucExpiry         DateTime?
-  permitExpiry      DateTime?
+  rcDocUrl        String?
+  insuranceDocUrl String?
+  fitnessDocUrl   String?
+  pucDocUrl       String?
+  permitDocUrl    String?
+  insuranceExpiry DateTime?
+  fitnessExpiry   DateTime?
+  pucExpiry       DateTime?
+  permitExpiry    DateTime?
 
-  assignments FleetTruckUsage[] @relation("TruckUsage")
+  assignments FleetTruckUsage[]    @relation("TruckUsage")
   maintenance FleetMaintenance[]
   fuelLogs    FleetFuelLog[]
   documents   FleetTruckDocument[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
   @@map("fleet_trucks")
 }
@@ -1024,8 +1030,8 @@ model FleetDriver {
   isActive     Boolean    @default(true)
   joinedAt     DateTime   @default(now())
 
-  assignments      TruckAssignment[]
-  currentTrucks    FleetTruck[]     @relation("CurrentTruckDriver")
+  assignments   TruckAssignment[]
+  currentTrucks FleetTruck[]      @relation("CurrentTruckDriver")
 
   @@unique([fleetOwnerId, driverId])
   @@map("fleet_drivers")
@@ -1043,7 +1049,7 @@ model TruckAssignment {
   booking       Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   fleetOwnerId  String
   fleetOwner    FleetOwner  @relation(fields: [fleetOwnerId], references: [id])
-  truckId       String      // references FleetTruck.id — not a Prisma relation to avoid circularity
+  truckId       String // references FleetTruck.id — not a Prisma relation to avoid circularity
   fleetDriverId String
   fleetDriver   FleetDriver @relation(fields: [fleetDriverId], references: [id])
   assignedAt    DateTime    @default(now())
@@ -1055,10 +1061,10 @@ model TruckAssignment {
 
 // Tracks which truck was used on which assignment (avoids direct FleetTruck ↔ TruckAssignment circular relation)
 model FleetTruckUsage {
-  id           String      @id @default(uuid())
+  id           String          @id @default(uuid())
   truckId      String
-  truck        FleetTruck  @relation("TruckUsage", fields: [truckId], references: [id], onDelete: Cascade)
-  assignmentId String      @unique
+  truck        FleetTruck      @relation("TruckUsage", fields: [truckId], references: [id], onDelete: Cascade)
+  assignmentId String          @unique
   assignment   TruckAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
   @@map("fleet_truck_usage")
@@ -1069,12 +1075,12 @@ model FleetTruckUsage {
 // ─────────────────────────────────────────────
 
 model FleetWallet {
-  id           String     @id @default(uuid())
-  fleetOwnerId String     @unique
-  fleetOwner   FleetOwner @relation(fields: [fleetOwnerId], references: [id], onDelete: Cascade)
-  cachedBalance Float     @default(0)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id            String     @id @default(uuid())
+  fleetOwnerId  String     @unique
+  fleetOwner    FleetOwner @relation(fields: [fleetOwnerId], references: [id], onDelete: Cascade)
+  cachedBalance Float      @default(0)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   transactions FleetWalletTransaction[]
 
@@ -1082,15 +1088,15 @@ model FleetWallet {
 }
 
 model FleetWalletTransaction {
-  id           String    @id @default(uuid())
+  id           String                @id @default(uuid())
   walletId     String
-  wallet       FleetWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       FleetWallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
   type         WalletTransactionType
   amount       Float
   balanceAfter Float
-  referenceId  String?   // bookingId
+  referenceId  String? // bookingId
   note         String?
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime              @default(now())
 
   @@map("fleet_wallet_transactions")
 }
@@ -1129,7 +1135,7 @@ model FleetMaintenance {
   fleetOwner   FleetOwner @relation(fields: [fleetOwnerId], references: [id], onDelete: Cascade)
   truckId      String
   truck        FleetTruck @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  serviceType  String     // e.g. "Oil Change", "Tyre Replacement", "General Service"
+  serviceType  String // e.g. "Oil Change", "Tyre Replacement", "General Service"
   description  String?
   costRupees   Float      @default(0)
   servicedAt   DateTime
@@ -1146,18 +1152,18 @@ model FleetMaintenance {
 // Records every fuel fill for cost tracking and efficiency analytics.
 
 model FleetFuelLog {
-  id           String     @id @default(uuid())
-  fleetOwnerId String
-  fleetOwner   FleetOwner @relation(fields: [fleetOwnerId], references: [id], onDelete: Cascade)
-  truckId      String
-  truck        FleetTruck @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  litresFilled Float
+  id            String     @id @default(uuid())
+  fleetOwnerId  String
+  fleetOwner    FleetOwner @relation(fields: [fleetOwnerId], references: [id], onDelete: Cascade)
+  truckId       String
+  truck         FleetTruck @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  litresFilled  Float
   pricePerLitre Float
-  totalCost    Float
-  odometerKm   Float?
-  filledAt     DateTime
-  fuelStation  String?
-  createdAt    DateTime   @default(now())
+  totalCost     Float
+  odometerKm    Float?
+  filledAt      DateTime
+  fuelStation   String?
+  createdAt     DateTime   @default(now())
 
   @@map("fleet_fuel_logs")
 }
@@ -1168,15 +1174,14 @@ model FleetFuelLog {
 // Stores compliance documents per truck (RC, Insurance, PUC, Fitness, Permit).
 
 model FleetTruckDocument {
-  id           String         @id @default(uuid())
-  truckId      String
-  truck        FleetTruck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  docType      String         // "RC" | "INSURANCE" | "PUC" | "FITNESS" | "PERMIT"
-  fileUrl      String
-  expiryDate   DateTime?
-  uploadedAt   DateTime       @default(now())
-  status       DocumentStatus @default(PENDING)
+  id         String         @id @default(uuid())
+  truckId    String
+  truck      FleetTruck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  docType    String // "RC" | "INSURANCE" | "PUC" | "FITNESS" | "PERMIT"
+  fileUrl    String
+  expiryDate DateTime?
+  uploadedAt DateTime       @default(now())
+  status     DocumentStatus @default(PENDING)
 
   @@map("fleet_truck_documents")
 }
-
