@@ -164,6 +164,10 @@ async function sendOtpViaPush(fcmToken: string, otp: string): Promise<void> {
 export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: string }) {
   // ── Demo account: skip real OTP entirely ────────────────────────────────
   if (isDemoAccount(phone)) {
+    if (fcmToken) {
+      await storeFcmToken(phone, fcmToken);
+      logger.info(`[OTP] FCM token saved to Redis for demo account ${phone}`);
+    }
     logger.info(`[OTP] Demo account ${phone} — static OTP accepted, skipping delivery`);
     return { message: 'OTP sent successfully' };
   }
@@ -257,10 +261,14 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     }
   }
 
-  // Prepare update data - include fcmToken if provided
+  // Prepare update data - include fcmToken if provided or found in Redis cache
   const updateData: any = {};
-  if (fcmToken) {
-    updateData.fcmToken = fcmToken;
+  let tokenToSave = fcmToken;
+  if (!tokenToSave) {
+    tokenToSave = await getStoredFcmToken(phone);
+  }
+  if (tokenToSave) {
+    updateData.fcmToken = tokenToSave;
   }
 
   // Find or create user (phone is the unique identifier in this system)
@@ -274,7 +282,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       role: role as any,
       name: demoInfo?.name,           // pre-fill name for demo accounts
       profileComplete: !!demoInfo,    // mark profile complete for demo accounts
-      ...(fcmToken && { fcmToken }) 
+      ...(tokenToSave && { fcmToken: tokenToSave }) 
     },
     select: {
       id: true,
