@@ -441,7 +441,7 @@ export async function cancelBooking(
     return updated;
 }
 
-export async function cancelBookingBySystem(bookingId: string, reason: string) {
+export async function cancelBookingBySystem(bookingId: string, reason: string, cancelledBy: string = 'SYSTEM') {
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
     if (!booking) return;
 
@@ -452,7 +452,7 @@ export async function cancelBookingBySystem(bookingId: string, reason: string) {
         data: {
             status: BookingStatus.CANCELLED,
             cancellationReason: reason,
-            cancelledBy: 'SYSTEM',
+            cancelledBy: cancelledBy,
             cancellationTime: new Date(),
         },
         select: bookingDetailSelect,

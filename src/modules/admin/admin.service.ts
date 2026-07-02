@@ -15,6 +15,8 @@ import type {
   WalletCreditInput, DocStatusInput, DocVerifiedInput, PricingUpdateInput,
   AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery,
 } from './admin.schema';
+import { cancelBookingBySystem, assertTransition } from '../booking/booking.service';
+import { BookingStatus } from '@prisma/client';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -300,6 +302,8 @@ export async function adminAssignDriver(bookingId: string, input: AssignDriverIn
   if (!driver) throw AppError.notFound('Driver not found');
   if (driver.status !== 'AVAILABLE') throw AppError.badRequest('Driver is not available');
 
+  assertTransition(booking.status, BookingStatus.DRIVER_ASSIGNED);
+
   const updated = await prisma.booking.update({
     where: { id: bookingId },
     data: { driverId: input.driverId, status: 'DRIVER_ASSIGNED' },
@@ -324,15 +328,10 @@ export async function adminCancelBooking(bookingId: string, input: CancelBooking
     throw AppError.badRequest('Cannot cancel a completed or already cancelled booking');
   }
 
-  return prisma.booking.update({
-    where: { id: bookingId },
-    data: {
-      status: 'CANCELLED',
-      cancellationReason: input.reason,
-      cancelledBy: 'ADMIN',
-      cancellationTime: new Date(),
-    },
-  });
+  // Delegate to the booking service to ensure state machine rules and event bus notifications fire
+  const updated = await cancelBookingBySystem(bookingId, input.reason, 'ADMIN');
+  if (!updated) throw AppError.internal('Failed to cancel booking');
+  return updated;
 }
 
 export async function adminRefundBooking(bookingId: string, input: RefundInput) {
@@ -541,13 +540,21 @@ export async function setDriverDocVerified(driverId: string, input: DocVerifiedI
   const driver = await prisma.driver.findUnique({ where: { id: driverId }, include: { user: true } });
   if (!driver) throw AppError.notFound('Driver not found');
 
-  await prisma.driver.update({ 
-    where: { id: driverId }, 
-    data: { 
-      isDocVerified: input.isDocVerified,
-      status: input.isDocVerified ? undefined : 'OFFLINE'
-    } 
-  });
+  await prisma.$transaction([
+    prisma.driver.update({ 
+      where: { id: driverId }, 
+      data: { 
+        isDocVerified: input.isDocVerified,
+        status: input.isDocVerified ? undefined : 'OFFLINE'
+      } 
+    }),
+    ...(input.isDocVerified ? [
+      prisma.user.update({
+        where: { id: driver.userId },
+        data: { profileComplete: true }
+      })
+    ] : [])
+  ]);
 
   if (input.isDocVerified && driver.user.fcmToken) {
     await notificationService.sendToDevice(driver.user.fcmToken, {
@@ -620,13 +627,29 @@ export async function getFleetOwnerById(id: string) {
 }
 
 export async function toggleFleetOwnerStatus(id: string, data: { isVerified?: boolean; isActive?: boolean }) {
-  return prisma.fleetOwner.update({ where: { id }, data });
+  const fleetOwner = await prisma.fleetOwner.update({ where: { id }, data });
+  
+  if (data.isActive === false) {
+    // If the fleet owner is deactivated, forcefully revoke all active sessions immediately
+    await forceLogoutAllSessions(fleetOwner.userId);
+  }
+  
+  return fleetOwner;
 }
 
 export async function getFleetTrucks(q: FleetQuery) {
+  const where: any = {};
+  if (q.search) {
+    where.OR = [
+      { registrationNo: { contains: q.search, mode: 'insensitive' } },
+      { fleetOwner: { companyName: { contains: q.search, mode: 'insensitive' } } },
+    ];
+  }
+
   const [total, trucks] = await Promise.all([
-    prisma.fleetTruck.count(),
+    prisma.fleetTruck.count({ where }),
     prisma.fleetTruck.findMany({
+      where,
       skip: (q.page - 1) * q.limit,
       take: q.limit,
       orderBy: { createdAt: 'desc' },

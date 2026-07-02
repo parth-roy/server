@@ -242,8 +242,23 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     await deleteOtp(phone);
   }
 
+  // Fetch existing user to check if they are deactivated
+  const existingUser = await prisma.user.findUnique({ 
+    where: { phone },
+    include: { fleetOwner: true } 
+  });
+  
+  if (existingUser) {
+    if (!existingUser.isActive) {
+      throw AppError.forbidden('Your account has been deactivated by an administrator.');
+    }
+    if (existingUser.role === 'FLEET_OWNER' && existingUser.fleetOwner && !existingUser.fleetOwner.isActive) {
+      throw AppError.forbidden('Your fleet account has been deactivated by an administrator.');
+    }
+  }
+
   // Prepare update data - include fcmToken if provided
-  const updateData: any = { isActive: true };
+  const updateData: any = {};
   if (fcmToken) {
     updateData.fcmToken = fcmToken;
   }
@@ -254,6 +269,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     where: { phone },
     update: updateData,
     create: { 
+
       phone, 
       role: role as any,
       name: demoInfo?.name,           // pre-fill name for demo accounts
