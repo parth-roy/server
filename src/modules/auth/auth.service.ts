@@ -263,7 +263,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
 
   // Prepare update data - include fcmToken if provided or found in Redis cache
   const updateData: any = {};
-  let tokenToSave = fcmToken;
+  let tokenToSave: string | null = fcmToken || null;
   if (!tokenToSave) {
     tokenToSave = await getStoredFcmToken(phone);
   }
