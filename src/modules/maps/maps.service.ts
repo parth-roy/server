@@ -64,7 +64,7 @@ export const mapsService = {
           params: {
             access_token: MAPBOX_API_KEY,
             autocomplete: true,
-            country: 'in', // Restrict to India
+            // country: 'in', // Temporarily disabled for emulator testing in USA
             limit: 5,
           },
         }
