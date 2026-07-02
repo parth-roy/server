@@ -38,7 +38,7 @@ const VALID_TRANSITIONS: Partial<Record<BookingStatus, BookingStatus[]>> = {
     // COMPLETED and CANCELLED have no outgoing transitions
 };
 
-function assertTransition(current: BookingStatus, next: BookingStatus): void {
+export function assertTransition(current: BookingStatus, next: BookingStatus): void {
     const allowed = VALID_TRANSITIONS[current] ?? [];
     if (!allowed.includes(next)) {
         throw AppError.badRequest(

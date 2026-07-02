@@ -16,7 +16,6 @@ import type {
   AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery,
 } from './admin.schema';
 import { cancelBookingBySystem, assertTransition } from '../booking/booking.service';
-import { BookingStatus } from '@prisma/client';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -487,7 +486,7 @@ export async function getDrivers(q: DriversQuery) {
     ];
   }
 
-  const [total, drivers] = await Promise.all([
+  const [total, rawDrivers] = await Promise.all([
     prisma.driver.count({ where }),
     prisma.driver.findMany({
       where,
@@ -502,6 +501,15 @@ export async function getDrivers(q: DriversQuery) {
       },
     }),
   ]);
+
+  const drivers = rawDrivers.map(d => {
+    let complianceScore = 0;
+    if (d.dlVerifStatus === 'VERIFIED') complianceScore += 30;
+    if (d.isDocVerified) complianceScore += 40;
+    if (d.user?.isActive) complianceScore += 10;
+    if (d.vehicle?.rcVerifStatus === 'VERIFIED') complianceScore += 20;
+    return { ...d, complianceScore };
+  });
 
   return { total, page: q.page, limit: q.limit, data: drivers };
 }
@@ -593,7 +601,7 @@ export async function getFleetOwners(q: FleetQuery) {
     ];
   }
 
-  const [total, owners] = await Promise.all([
+  const [total, rawOwners] = await Promise.all([
     prisma.fleetOwner.count({ where }),
     prisma.fleetOwner.findMany({
       where,
@@ -601,12 +609,41 @@ export async function getFleetOwners(q: FleetQuery) {
       take: q.limit,
       orderBy: { createdAt: 'desc' },
       include: {
-        user: { select: { id: true, name: true, phone: true, email: true } },
+        user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
         wallet: { select: { cachedBalance: true } },
         _count: { select: { trucks: true, fleetDrivers: true } },
+        trucks: {
+          select: { rcVerifStatus: true, insuranceExpiry: true, pucExpiry: true, fitnessExpiry: true, permitExpiry: true }
+        }
       },
     }),
   ]);
+
+  const owners = rawOwners.map((o: any) => {
+    let complianceScore = 0;
+    if (o.isVerified) complianceScore += 20;
+    if (o.user?.isActive) complianceScore += 10;
+    
+    let fleetScore = 30; // base score if no trucks
+    if (o.trucks && o.trucks.length > 0) {
+      const totalTruckScore = o.trucks.reduce((acc: number, t: any) => {
+        let ts = 0;
+        if (t.rcVerifStatus === 'VERIFIED') ts += 20;
+        const now = Date.now();
+        if (t.insuranceExpiry && new Date(t.insuranceExpiry).getTime() > now) ts += 12.5;
+        if (t.pucExpiry && new Date(t.pucExpiry).getTime() > now) ts += 12.5;
+        if (t.fitnessExpiry && new Date(t.fitnessExpiry).getTime() > now) ts += 12.5;
+        if (t.permitExpiry && new Date(t.permitExpiry).getTime() > now) ts += 12.5;
+        return acc + ts;
+      }, 0);
+      fleetScore = totalTruckScore / o.trucks.length;
+    }
+    complianceScore += fleetScore;
+    
+    // Remove trucks from output to keep payload light
+    const { trucks, ...ownerWithoutTrucks } = o;
+    return { ...ownerWithoutTrucks, complianceScore: Math.round(complianceScore) };
+  });
 
   return { total, page: q.page, limit: q.limit, data: owners };
 }
