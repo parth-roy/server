@@ -775,6 +775,14 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw AppError.notFound('Driver profile not found');
 
+    // Guard: reject if driver is already on another trip
+    if (driver.status === 'ON_TRIP') {
+        throw AppError.conflict(
+            'You are already on an active trip. Complete or cancel it before accepting a new booking.',
+            'DRIVER_ALREADY_ON_TRIP'
+        );
+    }
+
     // Generate 4-digit pickup OTP
     const pickupOtp = String(randomInt(1000, 9999));
 
