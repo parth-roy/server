@@ -8,7 +8,7 @@ import { emitToWorkerRoom } from '@shared/socket/socket.instance';
 
 const MAX_DRIVERS_TO_NOTIFY = 5;
 const MAX_SEARCH_RADIUS_KM = 50;
-const MAX_DECLINE_ROUNDS = 3;
+const MAX_DECLINE_ROUNDS = 1;
 const REDISPATCH_DELAY_MS = 5000;
 
 // Haversine formula — straight-line km between two lat/lng points

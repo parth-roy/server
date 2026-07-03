@@ -31,7 +31,7 @@ const VALID_TRANSITIONS: Partial<Record<BookingStatus, BookingStatus[]>> = {
     [BookingStatus.DRAFT]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED],
     [BookingStatus.CONFIRMED]: [BookingStatus.DRIVER_ASSIGNED, BookingStatus.DRIVER_ARRIVING, BookingStatus.CANCELLED],
     [BookingStatus.DRIVER_ASSIGNED]: [BookingStatus.DRIVER_ARRIVING, BookingStatus.CANCELLED],
-    [BookingStatus.DRIVER_ARRIVING]: [BookingStatus.PICKED_UP],
+    [BookingStatus.DRIVER_ARRIVING]: [BookingStatus.PICKED_UP, BookingStatus.CANCELLED],
     [BookingStatus.PICKED_UP]: [BookingStatus.IN_TRANSIT, BookingStatus.DELIVERED],
     [BookingStatus.IN_TRANSIT]: [BookingStatus.DELIVERED],
     [BookingStatus.DELIVERED]: [BookingStatus.COMPLETED],
@@ -361,7 +361,12 @@ export async function getBooking(bookingId: string, userId: string, role: string
 
     if (role === UserRole.DRIVER) {
         const driver = await prisma.driver.findUnique({ where: { userId } });
-        if (!driver || booking.driverId !== driver.id) {
+        if (!driver) {
+            throw AppError.forbidden('Driver profile not found');
+        }
+        // Allow access if the booking is not assigned to anyone yet (so they can see details before accepting)
+        // OR if it's assigned specifically to this driver
+        if (booking.driverId !== null && booking.driverId !== driver.id) {
             throw AppError.forbidden('You do not have access to this booking');
         }
     }
