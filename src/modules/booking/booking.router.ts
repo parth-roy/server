@@ -106,6 +106,14 @@ bookingRouter.patch(
   BookingController.driverDeclineBooking
 );
 
+// ─── Driver: Pickup OTP verification ────────────────────────────────────────
+// Driver enters OTP told by customer → booking transitions DRIVER_ARRIVING → PICKED_UP
+bookingRouter.post(
+  '/:id/verify-pickup-otp',
+  requireRole(UserRole.DRIVER),
+  BookingController.verifyPickupOtp
+);
+
 // ─── Enterprise Live Bidding ─────────────────────────────────────────────────
 bookingRouter.post(
   '/:id/bids',

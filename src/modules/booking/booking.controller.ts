@@ -291,3 +291,14 @@ export async function driverDeclineBooking(req: Request, res: Response, next: Ne
     } catch (err) { next(err); }
 }
 
+export async function verifyPickupOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+        const booking = await BookingService.verifyPickupOtp(
+            req.params.id as string,
+            req.user!.id,
+            req.body.otp as string
+        );
+        sendSuccess(res, booking, 'Pickup OTP verified — trip started!');
+    } catch (err) { next(err); }
+}
+

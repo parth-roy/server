@@ -130,6 +130,14 @@ const bookingDetailSelect = {
             },
         },
     },
+    customer: {
+        select: {
+            name: true,
+            phone: true,
+            profileImageUrl: true,
+        },
+    },
+    pickupOtp: true,
 } as const;
 
 // Internal helper — verifies the calling driver owns the booking
@@ -767,6 +775,9 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw AppError.notFound('Driver profile not found');
 
+    // Generate 4-digit pickup OTP
+    const pickupOtp = String(randomInt(1000, 9999));
+
     // Two valid accept scenarios handled atomically:
     //
     // Flow A — Direct dispatch: dispatch notified multiple drivers via FCM.
@@ -778,14 +789,14 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
 
     let acceptResult = await prisma.booking.updateMany({
         where: { id: bookingId, driverId: null, status: BookingStatus.CONFIRMED },
-        data: { driverId: driver.id, status: BookingStatus.DRIVER_ARRIVING },
+        data: { driverId: driver.id, status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
     });
 
     if (acceptResult.count === 0) {
         // Try fleet assignment flow
         acceptResult = await prisma.booking.updateMany({
             where: { id: bookingId, driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
-            data: { status: BookingStatus.DRIVER_ARRIVING },
+            data: { status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
         });
     }
 
@@ -805,27 +816,149 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     // Fetch booking to get customerId for notification
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
 
-    // Notify customer via push + in-app
+    // Notify customer via push + in-app (include OTP in push so customer sees it on lock screen)
     if (booking?.customerId) {
         const customer = await prisma.user.findUnique({ where: { id: booking.customerId } });
         if (customer?.fcmToken) {
             await notificationService.sendToDevice(customer.fcmToken, {
                 title: '🚛 Driver Accepted!',
-                body: 'Your driver has accepted the booking and is on the way.',
-                data: { type: 'DRIVER_ACCEPTED', bookingId },
+                body: `Your driver is on the way. Your pickup OTP is ${pickupOtp} — share it with the driver when they arrive.`,
+                data: { type: 'DRIVER_ACCEPTED', bookingId, pickupOtp },
             });
         }
         await createNotification(
             booking.customerId,
             '🚛 Driver Accepted!',
-            'Your driver has accepted the booking and is on the way.',
+            `Your driver is on the way. Your pickup OTP is ${pickupOtp}.`,
             NotificationType.BOOKING_STATUS,
             bookingId,
         );
     }
 
-    logger.info(`Driver ${driver.id} accepted booking ${bookingId}`);
+    logger.info(`Driver ${driver.id} accepted booking ${bookingId} — OTP: ${pickupOtp}`);
     return prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
+}
+
+// ─────────────────────────────────────────────
+// DRIVER — VERIFY PICKUP OTP (DRIVER_ARRIVING → PICKED_UP)
+// Driver enters the OTP shown to the customer. On success, trip starts.
+// ─────────────────────────────────────────────
+export async function verifyPickupOtp(bookingId: string, userId: string, otp: string) {
+    const { booking, driver } = await getDriverBooking(bookingId, userId);
+
+    if (booking.status !== BookingStatus.DRIVER_ARRIVING) {
+        throw AppError.badRequest(
+            'Booking must be in DRIVER_ARRIVING status to verify pickup OTP',
+            'INVALID_BOOKING_STATUS'
+        );
+    }
+
+    const storedOtp = (booking as any).pickupOtp as string | null;
+    if (!storedOtp) {
+        throw AppError.internal('Pickup OTP not found for this booking');
+    }
+    if (storedOtp !== otp.trim()) {
+        throw AppError.badRequest('Invalid OTP. Please ask the customer for the correct code.', 'INVALID_OTP');
+    }
+
+    const pickedUpAt = new Date();
+
+    // Compute waiting charge if arrivalTime was recorded
+    let waitingCharge = 0;
+    if ((booking as any).arrivalTime) {
+        try {
+            const vehicle = await prisma.vehicleTypePricing.findUnique({
+                where: { vehicleType: booking.vehicleType as any },
+            });
+            if (vehicle) {
+                const { pricingService } = await import('@modules/pricing/pricing.service');
+                const waitingResult = pricingService.calculateWaitingCharge(
+                    (booking as any).arrivalTime,
+                    pickedUpAt,
+                    vehicle,
+                );
+                waitingCharge = waitingResult.waitingCharge;
+            }
+        } catch (err) {
+            logger.error('[Booking] Failed to compute waiting charge on OTP verify:', err);
+        }
+    }
+
+    const updated = await prisma.booking.update({
+        where: { id: bookingId },
+        data: {
+            status: BookingStatus.PICKED_UP,
+            actualPickupTime: pickedUpAt,
+            pickupOtp: null, // Clear OTP after use for security
+            ...(waitingCharge > 0 && { waitingCharge }),
+        },
+        select: bookingDetailSelect,
+    });
+
+    // Emit socket event so customer UI transitions immediately
+    const { emitToBookingRoom } = await import('@shared/socket/socket.instance');
+    try {
+        emitToBookingRoom(bookingId, 'pickup_otp_verified', {
+            bookingId,
+            status: 'PICKED_UP',
+        });
+    } catch (_) { /* socket may not be available in test env */ }
+
+    // Notify customer
+    const customer = await prisma.user.findUnique({
+        where: { id: booking.customerId },
+        select: { fcmToken: true },
+    });
+    if (customer?.fcmToken) {
+        await notificationService.sendToDevice(customer.fcmToken, {
+            title: '📦 Pickup Confirmed!',
+            body: 'Your goods have been picked up. The driver is heading to the destination.',
+            data: { type: 'PICKUP_CONFIRMED', bookingId },
+        });
+    }
+    await createNotification(
+        booking.customerId,
+        '📦 Pickup Confirmed!',
+        'Your goods have been picked up. The driver is heading to the destination.',
+        NotificationType.BOOKING_STATUS,
+        bookingId,
+    );
+
+    logger.info(`Driver ${driver.id} verified pickup OTP for booking ${bookingId}`);
+    return updated;
+}
+
+// ─────────────────────────────────────────────
+// DRIVER — SAVE LOCATION HISTORY (called from Socket.IO location event)
+// Saves a GPS breadcrumb for admin/fleet panel tracking history.
+// ─────────────────────────────────────────────
+export async function saveLocationHistory(params: {
+    bookingId: string;
+    driverId: string;
+    lat: number;
+    lng: number;
+    speedKmh?: number;
+    headingDeg?: number;
+    accuracyM?: number;
+    tripPhase?: string;
+}) {
+    try {
+        await prisma.bookingLocationHistory.create({
+            data: {
+                bookingId: params.bookingId,
+                driverId: params.driverId,
+                latitude: params.lat,
+                longitude: params.lng,
+                speedKmh: params.speedKmh,
+                headingDeg: params.headingDeg,
+                accuracyM: params.accuracyM,
+                tripPhase: params.tripPhase,
+            },
+        });
+    } catch (err) {
+        logger.error('[LocationHistory] Failed to save:', err);
+        // Non-fatal — never block the GPS update
+    }
 }
 
 // ─────────────────────────────────────────────

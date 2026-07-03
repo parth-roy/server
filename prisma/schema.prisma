@@ -551,6 +551,8 @@ model Booking {
   razorpayOrderId String? // Stored on createOrder; verified in verifyPayment to prevent replay attacks
   declineCount    Int            @default(0) // Incremented on each driver decline; triggers re-dispatch
 
+  pickupOtp       String? // 4-digit OTP shown to customer, must be entered by driver before pickup starts
+
   customerRating Float?
   driverRating   Float?
   customerNote   String?
@@ -615,11 +617,17 @@ model BookingLocationHistory {
   id         String   @id @default(uuid())
   bookingId  String
   booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  driverId   String?  // Denormalised for fast admin queries — no join needed
   latitude   Float
   longitude  Float
+  speedKmh   Float?   // Speed in km/h at recording time (from GPS)
+  headingDeg Float?   // Bearing in degrees 0–360
+  accuracyM  Float?   // GPS accuracy in metres
+  tripPhase  String?  // DRIVER_ARRIVING | PICKED_UP | IN_TRANSIT — which leg of the trip
   recordedAt DateTime @default(now())
 
   @@index([bookingId, recordedAt])
+  @@index([driverId, recordedAt]) // Admin / fleet panel: all movement for a driver
   @@map("booking_location_history")
 }
 

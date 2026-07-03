@@ -72,7 +72,14 @@ export function setupTrackingGateway(io: SocketServer) {
         // Driver emits GPS location update.
         // FIX HIGH-33: Verify the socket user is the ASSIGNED DRIVER for this booking
         // before broadcasting. Prevents any other user from spoofing driver location.
-        socket.on('driver_location_update', async (data: { bookingId: string; lat: number; lng: number }) => {
+        socket.on('driver_location_update', async (data: {
+            bookingId: string;
+            lat: number;
+            lng: number;
+            speedKmh?: number;   // GPS speed in km/h
+            headingDeg?: number; // GPS bearing 0-360
+            accuracyM?: number;  // GPS accuracy in metres
+        }) => {
             const { bookingId, lat, lng } = data;
 
             if (
@@ -115,8 +122,23 @@ export function setupTrackingGateway(io: SocketServer) {
 
             const now = new Date();
 
-            // 1. Broadcast instantly to all subscribers (live map marker)
-            tracking.to(`booking_${bookingId}`).emit('location_updated', { lat, lng, timestamp: now });
+            // Determine trip phase for location history
+            let tripPhase: string | undefined;
+            try {
+                const bk = await prisma.booking.findUnique({
+                    where: { id: bookingId },
+                    select: { status: true },
+                });
+                tripPhase = bk?.status ?? undefined;
+            } catch { /* non-fatal */ }
+
+            // 1. Broadcast instantly to all subscribers (live map marker + speed for UI)
+            tracking.to(`booking_${bookingId}`).emit('location_updated', {
+                lat, lng,
+                speedKmh: data.speedKmh,
+                headingDeg: data.headingDeg,
+                timestamp: now,
+            });
 
             // 2. Store in Redis as PRIMARY location store (ETA worker reads from here)
             //    This avoids DB hits on every 5s GPS ping.
@@ -127,9 +149,18 @@ export function setupTrackingGateway(io: SocketServer) {
                 JSON.stringify({ lat, lng, updatedAt: now.getTime(), bookingId }),
             ).catch(err => logger.error('Failed to cache driver location in Redis:', err));
 
-            // 3. Persist location history (fire-and-forget — DB write)
+            // 3. Persist rich location history (fire-and-forget — non-blocking DB write)
             prisma.bookingLocationHistory.create({
-                data: { bookingId, latitude: lat, longitude: lng },
+                data: {
+                    bookingId,
+                    driverId: driver.id,
+                    latitude: lat,
+                    longitude: lng,
+                    speedKmh: data.speedKmh,
+                    headingDeg: data.headingDeg,
+                    accuracyM: data.accuracyM,
+                    tripPhase,
+                },
             }).catch(err => logger.error('Failed to save location history:', err));
 
             // 4. Snapshot driver's DB position every 30s (not on every ping)
