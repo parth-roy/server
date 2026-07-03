@@ -15,22 +15,27 @@ export const notificationService = {
   sendToDevice: async (fcmToken: string, payload: NotificationPayload): Promise<{ success: boolean; messageId?: string; error?: string }> => {
     try {
       const messaging = getMessaging();
+      const isBooking = payload.data?.type === 'NEW_BOOKING' || payload.data?.type === 'BOOKING_DISPATCH';
 
-      const message = {
-        notification: {
-          title: payload.title,
-          body: payload.body,
+      const message: any = {
+        data: {
+            ...payload.data,
+            title: payload.title, // Pass title/body in data so Flutter can display it
+            body: payload.body,
         },
-        data: payload.data || {},
         token: fcmToken,
-        ...(payload.imageUrl && {
-          android: {
-            notification: {
-              imageUrl: payload.imageUrl,
-            },
-          },
-        }),
       };
+
+      if (!isBooking) {
+          message.notification = {
+              title: payload.title,
+              body: payload.body,
+          };
+      }
+
+      if (payload.imageUrl) {
+        message.android = { notification: { imageUrl: payload.imageUrl } };
+      }
 
       const result = await messaging.send(message);
       logger.info(`Notification sent successfully to device: ${result}`);
@@ -47,15 +52,23 @@ export const notificationService = {
   sendToDevices: async (fcmTokens: string[], payload: NotificationPayload): Promise<{ success: boolean; successCount: number; failureCount: number; errors?: string[] }> => {
     try {
       const messaging = getMessaging();
+      const isBooking = payload.data?.type === 'NEW_BOOKING' || payload.data?.type === 'BOOKING_DISPATCH';
 
-      const message = {
-        notification: {
-          title: payload.title,
-          body: payload.body,
+      const message: any = {
+        data: {
+            ...payload.data,
+            title: payload.title,
+            body: payload.body,
         },
-        data: payload.data || {},
         tokens: fcmTokens,
       };
+
+      if (!isBooking) {
+          message.notification = {
+              title: payload.title,
+              body: payload.body,
+          };
+      }
 
       const result = await messaging.sendEachForMulticast(message);
       

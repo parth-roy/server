@@ -979,7 +979,14 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
     if (!driver) throw AppError.notFound('Driver profile not found');
 
     const booking = await prisma.booking.findFirst({
-        where: { id: bookingId, driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
+        where: { 
+            id: bookingId,
+            // A driver can decline if it's explicitly assigned to them OR if it's broadcasted (CONFIRMED & driverId null)
+            OR: [
+                { driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
+                { driverId: null, status: BookingStatus.CONFIRMED }
+            ]
+        },
     });
     if (!booking) throw AppError.notFound('Booking not found or already accepted/declined');
 
