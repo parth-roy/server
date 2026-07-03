@@ -66,6 +66,7 @@ const bookingDetailSelect = {
     driverId: true,
     status: true,
     vehicleType: true,
+    declineCount: true,
     hasLoadingService: true,
     pickupLat: true,
     pickupLng: true,
