@@ -9,7 +9,32 @@ import type {
 
 
 // ─────────────────────────────────────────────
+// 
 // PROFILE
+// 
+
+export async function getStats(userId: string) {
+  const totalBookings = await prisma.booking.count({
+    where: { customerId: userId }
+  });
+
+  const completedBookings = await prisma.booking.count({
+    where: { 
+      customerId: userId, 
+      status: { in: ['COMPLETED', 'DELIVERED'] }
+    }
+  });
+
+  const ratingAgg = await prisma.booking.aggregate({
+    where: { userId, customerRating: { not: null } },
+    _avg: { customerRating: true }
+  });
+
+  const rating = ratingAgg._avg.customerRating ? Number(ratingAgg._avg.customerRating.toFixed(1)) : 5.0;
+
+  return { totalBookings, completedBookings, rating };
+}
+
 // ─────────────────────────────────────────────
 
 export async function getProfile(userId: string) {

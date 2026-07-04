@@ -7,6 +7,15 @@ import { s3Service, UploadFolder } from '@modules/upload/upload.service';
 
 // ─── Profile ───────────────────────────────────────────────────────────────
 
+export async function getStats(req: Request, res: Response, next: NextFunction) {
+    try {
+        const stats = await UserService.getStats(req.user!.id);
+        sendSuccess(res, stats);
+    } catch (err) {
+        next(err);
+    }
+}
+
 export async function getProfile(req: Request, res: Response, next: NextFunction) {
     try {
         const user = await UserService.getProfile(req.user!.id);

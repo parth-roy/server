@@ -20,6 +20,7 @@ userRouter.use(authenticate);
 
 // ─── Profile ───────────────────────────────────────────────────────────────
 userRouter.get('/me', UserController.getProfile);
+userRouter.get('/me/stats', UserController.getStats);
 userRouter.patch('/me', validate(updateProfileSchema), UserController.updateProfile);
 userRouter.put('/me/fcm-token', validate(updateFcmTokenSchema), UserController.updateFcmToken);
 
