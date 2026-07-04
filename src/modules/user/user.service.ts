@@ -26,7 +26,7 @@ export async function getStats(userId: string) {
   });
 
   const ratingAgg = await prisma.booking.aggregate({
-    where: { userId, customerRating: { not: null } },
+    where: { customerId: userId, customerRating: { not: null } },
     _avg: { customerRating: true }
   });
 
