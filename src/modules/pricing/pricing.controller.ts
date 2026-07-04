@@ -43,6 +43,28 @@ export const pricingController = {
     } catch (error) { next(error); }
   },
 
+  // POST /api/v1/pricing/estimate-all
+  estimateAll: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { pickupLat, pickupLng, dropLat, dropLng } = req.body;
+
+      if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
+        throw AppError.badRequest(
+          'Required fields: pickupLat, pickupLng, dropLat, dropLng'
+        );
+      }
+
+      const estimates = await pricingService.estimateAll(
+        Number(pickupLat),
+        Number(pickupLng),
+        Number(dropLat),
+        Number(dropLng),
+      );
+
+      sendSuccess(res, estimates, 'Bulk fare estimates calculated');
+    } catch (error) { next(error); }
+  },
+
   // GET /api/v1/pricing/config
   getConfig: async (req: Request, res: Response, next: NextFunction) => {
     try {

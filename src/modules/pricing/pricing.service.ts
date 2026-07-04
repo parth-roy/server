@@ -571,6 +571,97 @@ export const pricingService = {
       maxCoinRedemptionPct: config.max_coin_redemption_pct,
     };
   },
+
+  // ── Bulk estimate: one Mapbox call → price all active vehicles ──────────
+  // Used by the vehicle selection screen to show real prices in the list.
+  // No audit log written (display-only). No loading/insurance add-ons assumed.
+  estimateAll: async (
+    pickupLat: number,
+    pickupLng: number,
+    dropLat: number,
+    dropLng: number,
+  ): Promise<{ vehicleType: string; grandTotal: number; totalFare: number; distanceKm: number; durationMinutes: number; surgeActive: boolean }[]> => {
+
+    // ── [1] Validate coordinates ──────────────────────────────────────────
+    if (!isInIndia(pickupLat, pickupLng)) {
+      throw AppError.badRequest('Pickup location must be within India', 'OUT_OF_SERVICE_AREA');
+    }
+    if (!isInIndia(dropLat, dropLng)) {
+      throw AppError.badRequest('Delivery location must be within India', 'OUT_OF_SERVICE_AREA');
+    }
+    if (isSameLocation(pickupLat, pickupLng, dropLat, dropLng)) {
+      throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+    }
+
+    // ── [2] Fetch route ONCE from Mapbox ─────────────────────────────────
+    const { distanceKm, durationMinutes } = await mapsService.getDistanceMatrix(
+      pickupLat, pickupLng, dropLat, dropLng
+    );
+
+    // ── [3] Load config + vehicles from cache (no extra DB/API calls) ─────
+    const [vehicles, config] = await Promise.all([
+      getVehiclePricingCached(),
+      getPricingConfig(),
+    ]);
+
+    if (distanceKm > config.max_trip_distance_km) {
+      throw AppError.badRequest(`Maximum trip distance is ${config.max_trip_distance_km} km`, 'DISTANCE_TOO_FAR');
+    }
+    if (distanceKm < config.min_trip_distance_km) {
+      throw AppError.badRequest(`Minimum trip distance is ${config.min_trip_distance_km} km`, 'DISTANCE_TOO_SHORT');
+    }
+
+    // ── [4] Compute price for each vehicle type in memory (no extra I/O) ──
+    const results = await Promise.all(
+      (vehicles as any[]).map(async (vehicle) => {
+        const baseFare     = vehicle.baseFare as number;
+        const distanceFare = distanceKm * (vehicle.pricePerKm as number);
+
+        // Time fare (capped at 2× distance fare)
+        const rawTimeFare = computeTimeFare(
+          durationMinutes,
+          vehicle.timeFreeMinutes ?? 30,
+          vehicle.timeChargePerMin ?? 1.5,
+          config.time_charge_enabled,
+        );
+        const timeFare = Math.min(rawTimeFare, 2 * distanceFare);
+
+        // Fuel surcharge
+        const fuelSurcharge = computeFuelSurcharge(distanceFare, config);
+
+        // Surge (always 1.0 in Stage 1; getSurgeMultiplier is fast — Redis read only)
+        const { multiplier: surgeMultiplier, surgeActive } = await getSurgeMultiplier(
+          pickupLat, pickupLng, vehicle.vehicleType, config
+        );
+        const effectiveSurge = Math.min(surgeMultiplier, vehicle.surgeHardCap ?? 1.5);
+
+        // Core fare — no loading/insurance in bulk display
+        const coreFare  = (baseFare + distanceFare + timeFare + fuelSurcharge) * effectiveSurge;
+        const subtotal  = coreFare;
+        const totalFare = Math.max(subtotal, vehicle.minFare as number);
+
+        // GST on freight only (no loading/insurance)
+        const freightGst = round(totalFare * config.gst_rate_freight);
+        const grandTotal = round(totalFare + freightGst);
+
+        return {
+          vehicleType:      vehicle.vehicleType as string,
+          grandTotal,
+          totalFare:        round(totalFare),
+          distanceKm:       round(distanceKm, 1),
+          durationMinutes,
+          surgeActive,
+        };
+      })
+    );
+
+    logger.info(
+      `[Pricing] estimateAll: ${results.length} vehicles | ${round(distanceKm, 1)}km | ` +
+      results.map(r => `${r.vehicleType}=₹${r.grandTotal}`).join(' | ')
+    );
+
+    return results;
+  },
 };
 
 // Re-export for backward compatibility with existing imports
