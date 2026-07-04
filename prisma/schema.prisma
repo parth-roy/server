@@ -40,6 +40,17 @@ enum VehicleType {
   TRUCK_17FT // 6–7 ton payload
   TRUCK_20FT // 7–9 ton payload
   CONTAINER_32FT // 32ft container, 15–18 ton payload
+  MAHINDRA_JEETO
+  ASHOK_LEYLAND_DOST
+  BOLERO_PICKUP
+  TATA_INTRA
+  MINI_OPEN_PICKUP
+  MINI_CLOSED_VAN
+  LCV_BOX_TRUCK
+  TRUCK_14FT_OPEN
+  TRUCK_14FT_CLOSED
+  TRUCK_17FT_CLOSED
+  TRUCK_19FT
 }
 
 enum BookingStatus {
