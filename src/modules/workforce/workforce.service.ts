@@ -321,15 +321,14 @@ export async function getDashboardStats(userId: string) {
     },
   });
 
-  // Today's earnings (via wallet transactions referencing job assignments)
-  const todayWallet = await prisma.wallet.findUnique({ where: { userId } });
+  // Today's earnings — from WorkerWallet transactions
+  const workerWalletForDashboard = await prisma.workerWallet.findUnique({ where: { workerId: worker.id }, select: { id: true } });
   let todayEarnings = 0;
-  if (todayWallet) {
-    const txns = await prisma.walletTransaction.aggregate({
+  if (workerWalletForDashboard) {
+    const txns = await prisma.workerWalletTransaction.aggregate({
       where: {
-        walletId: todayWallet.id,
-        type: WalletTransactionType.CREDIT,
-        reason: WalletTransactionReason.CASHBACK, // We use CASHBACK for worker payouts
+        walletId:  workerWalletForDashboard.id,
+        type:      WalletTransactionType.CREDIT,
         createdAt: { gte: todayStart },
       },
       _sum: { amount: true },
@@ -784,30 +783,30 @@ export async function completeJob(userId: string, assignmentId: string, input: C
     },
   });
 
-  // Credit payout to worker's wallet (atomic)
-  const workerUserId = userId;
-  let wallet = await prisma.wallet.findUnique({ where: { userId: workerUserId } });
-  if (!wallet) {
-    wallet = await prisma.wallet.create({ data: { userId: workerUserId, cachedBalance: 0 } });
-  }
+  // Credit payout to worker's dedicated WorkerWallet (atomic, idempotent)
+  // WorkerWallet is separate from the customer Wallet — same architecture as DriverWallet.
+  const workerRecord = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!workerRecord) throw AppError.notFound('Worker record not found');
 
-  const newBalance = wallet.cachedBalance + assignment.payoutAmount;
-  await prisma.$transaction([
-    prisma.wallet.update({
-      where: { userId: workerUserId },
-      data: { cachedBalance: newBalance },
-    }),
-    prisma.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: WalletTransactionType.CREDIT,
-        reason: WalletTransactionReason.CASHBACK, // Using CASHBACK for worker payouts
-        amount: assignment.payoutAmount,
-        balanceAfter: newBalance,
-        referenceId: assignmentId,
-      },
-    }),
-  ]);
+  const workerWallet = await prisma.workerWallet.upsert({
+    where: { workerId: workerRecord.id },
+    create: { workerId: workerRecord.id, cachedBalance: assignment.payoutAmount },
+    update: { cachedBalance: { increment: assignment.payoutAmount } },
+  });
+  const freshWorkerWallet = await prisma.workerWallet.findUnique({ where: { workerId: workerRecord.id } });
+
+  await prisma.workerWalletTransaction.create({
+    data: {
+      walletId: workerWallet.id,
+      type: WalletTransactionType.CREDIT,
+      reason: 'JOB_EARNING' as any,
+      amount: assignment.payoutAmount,
+      balanceAfter: freshWorkerWallet!.cachedBalance,
+      bookingId: assignment.bookingId,
+      referenceId: assignmentId,
+      note: `Job completed — Assignment ${assignmentId.substring(0, 8)}`,
+    },
+  });
 
   // FCM to worker confirming payout
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
@@ -851,44 +850,48 @@ export async function completeJob(userId: string, assignmentId: string, input: C
 // WALLET — BALANCE
 // ─────────────────────────────────────────────
 export async function getWalletBalance(userId: string) {
-  let wallet = await prisma.wallet.findUnique({ where: { userId } });
-  if (!wallet) {
-    wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
-  }
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const workerWallet = await prisma.workerWallet.upsert({
+    where: { workerId: worker.id },
+    create: { workerId: worker.id },
+    update: {},
+  });
 
   // Pending payout from active assignments
-  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   let pendingPayout = 0;
-  if (worker) {
-    const pending = await prisma.jobAssignment.aggregate({
-      where: {
-        workerId: worker.id,
-        status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
-      },
-      _sum: { payoutAmount: true },
-    });
-    pendingPayout = pending._sum.payoutAmount ?? 0;
-  }
+  const pending = await prisma.jobAssignment.aggregate({
+    where: {
+      workerId: worker.id,
+      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+    },
+    _sum: { payoutAmount: true },
+  });
+  pendingPayout = pending._sum.payoutAmount ?? 0;
 
-  return { balance: wallet.cachedBalance, pendingPayout };
+  return { balance: workerWallet.cachedBalance, commissionDue: workerWallet.commissionDue, pendingPayout };
 }
 
 // ─────────────────────────────────────────────
 // WALLET — TRANSACTION HISTORY
 // ─────────────────────────────────────────────
 export async function getWalletTransactions(userId: string, page: number, limit: number) {
-  const wallet = await prisma.wallet.findUnique({ where: { userId } });
-  if (!wallet) return { transactions: [], meta: { total: 0, page, limit, totalPages: 0 } };
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) return { transactions: [], meta: { total: 0, page, limit, totalPages: 0 } };
+
+  const workerWallet = await prisma.workerWallet.findUnique({ where: { workerId: worker.id } });
+  if (!workerWallet) return { transactions: [], meta: { total: 0, page, limit, totalPages: 0 } };
 
   const skip = (page - 1) * limit;
   const [transactions, total] = await prisma.$transaction([
-    prisma.walletTransaction.findMany({
-      where: { walletId: wallet.id },
+    prisma.workerWalletTransaction.findMany({
+      where: { walletId: workerWallet.id },
       orderBy: { createdAt: 'desc' },
       skip,
       take: limit,
     }),
-    prisma.walletTransaction.count({ where: { walletId: wallet.id } }),
+    prisma.workerWalletTransaction.count({ where: { walletId: workerWallet.id } }),
   ]);
 
   return { transactions, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
@@ -929,35 +932,79 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
 }
 
 // ─────────────────────────────────────────────
-// WALLET — WITHDRAW
+// WALLET — WITHDRAW (creates RazorpayX payout request)
 // ─────────────────────────────────────────────
 export async function withdrawWallet(userId: string, input: WithdrawInput) {
-  const wallet = await prisma.wallet.findUnique({ where: { userId } });
-  if (!wallet) throw AppError.notFound('Wallet not found');
-  
-  if (wallet.cachedBalance < input.amount) {
-    throw AppError.badRequest('Insufficient balance');
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true, bankAccountNo: true, bankIfsc: true, bankName: true, bankAccountHolderName: true, razorpayxContactId: true, razorpayxFundAccountId: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  if (!worker.bankAccountNo || !worker.bankIfsc) {
+    throw AppError.badRequest('Bank account details not configured. Please add your bank account first.', 'NO_BANK_ACCOUNT');
   }
 
-  const newBalance = wallet.cachedBalance - input.amount;
+  const workerWallet = await prisma.workerWallet.findUnique({ where: { workerId: worker.id } });
+  if (!workerWallet) throw AppError.notFound('Wallet not found');
 
-  const [updatedWallet, transaction] = await prisma.$transaction([
-    prisma.wallet.update({
-      where: { userId },
-      data: { cachedBalance: newBalance },
-    }),
-    prisma.walletTransaction.create({
+  const minWithdrawal = Number(process.env.MIN_WITHDRAWAL_AMOUNT ?? 50);
+  if (input.amount < minWithdrawal) {
+    throw AppError.badRequest(`Minimum withdrawal is ₹${minWithdrawal}`, 'BELOW_MIN_WITHDRAWAL');
+  }
+  if (workerWallet.cachedBalance < input.amount) {
+    throw AppError.badRequest('Insufficient balance', 'INSUFFICIENT_BALANCE');
+  }
+
+  // Check for in-progress withdrawal
+  const existing = await prisma.withdrawalRequest.findFirst({
+    where: {
+      entityType: 'WORKER',
+      entityId: worker.id,
+      status: { in: ['PENDING', 'AUTO_PROCESSING'] },
+    },
+  });
+  if (existing) throw AppError.badRequest('A withdrawal is already in progress.', 'WITHDRAWAL_IN_PROGRESS');
+
+  // Atomic: reserve funds + create request
+  const withdrawalRequest = await prisma.$transaction(async (tx) => {
+    const updatedWallet = await tx.workerWallet.update({
+      where: { workerId: worker.id },
+      data: { cachedBalance: { decrement: input.amount } },
+    });
+
+    await tx.workerWalletTransaction.create({
       data: {
-        walletId: wallet.id,
+        walletId: workerWallet.id,
         type: WalletTransactionType.DEBIT,
-        reason: WalletTransactionReason.REFUND,
+        reason: 'WITHDRAWAL' as any,
         amount: input.amount,
-        balanceAfter: newBalance,
-      }
-    })
-  ]);
+        balanceAfter: updatedWallet.cachedBalance,
+        note: `Withdrawal request — ₹${input.amount}`,
+      },
+    });
 
-  return { wallet: updatedWallet, transaction };
+    return tx.withdrawalRequest.create({
+      data: {
+        entityType: 'WORKER' as any,
+        entityId: worker.id,
+        amount: input.amount,
+        bankAccountNo:         worker.bankAccountNo!,
+        bankIfsc:              worker.bankIfsc!,
+        bankName:              worker.bankName ?? 'Unknown',
+        bankAccountHolderName: worker.bankAccountHolderName ?? 'Worker',
+        razorpayxContactId:    worker.razorpayxContactId,
+        razorpayxFundAccountId: worker.razorpayxFundAccountId,
+      },
+    });
+  });
+
+  logger.info(`[Workforce] Withdrawal requested: ₹${input.amount} for worker ${worker.id}`);
+
+  // Fire-and-forget: auto-trigger RazorpayX payout
+  const { processWithdrawalViaRazorpayX } = await import('@modules/driver-wallet/driver-wallet.service');
+  processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
+    logger.error(`[Workforce] Auto-payout failed for ${withdrawalRequest.id}:`, err);
+  });
+
+  return { withdrawalRequest, balance: workerWallet.cachedBalance - input.amount };
 }
 
 // ─────────────────────────────────────────────
@@ -1014,29 +1061,32 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
 // EARNINGS CHART (aggregated by period)
 // ─────────────────────────────────────────────
 export async function getEarningsChart(userId: string, query: EarningsChartQuery) {
-  const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true } });
-  if (!wallet) throw AppError.notFound('Wallet not found');
+  // Earnings chart — from WorkerWallet transactions
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+  const workerWalletForChart = await prisma.workerWallet.findUnique({ where: { workerId: worker.id }, select: { id: true } });
+  if (!workerWalletForChart) return { data: [], total: 0 };
 
   const now = new Date();
   let startDate: Date;
   if (query.period === 'day') {
     startDate = new Date(now);
-    startDate.setDate(now.getDate() - 7); // last 7 days
+    startDate.setDate(now.getDate() - 7);
   } else if (query.period === 'week') {
     startDate = new Date(now);
-    startDate.setDate(now.getDate() - 28); // last 4 weeks
+    startDate.setDate(now.getDate() - 28);
   } else {
     startDate = new Date(now);
-    startDate.setMonth(now.getMonth() - 6); // last 6 months
+    startDate.setMonth(now.getMonth() - 6);
   }
 
-  const transactions = await prisma.walletTransaction.findMany({
+  const transactions = await prisma.workerWalletTransaction.findMany({
     where: {
-      walletId: wallet.id,
-      type: WalletTransactionType.CREDIT,
+      walletId:  workerWalletForChart.id,
+      type:      WalletTransactionType.CREDIT,
       createdAt: { gte: startDate },
     },
-    select: { amount: true, createdAt: true },
+    select:  { amount: true, createdAt: true },
     orderBy: { createdAt: 'asc' },
   });
 

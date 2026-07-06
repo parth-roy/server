@@ -92,12 +92,54 @@ enum WalletTransactionReason {
   REFUND
   CASHBACK
   ADMIN_CREDIT
+  ADMIN_DEBIT
 }
 
 enum CoinTransactionType {
   EARN
   REDEEM
   EXPIRE
+}
+
+// ─────────────────────────────────────────────
+// DRIVER / WORKER WALLET ENUMS
+// ─────────────────────────────────────────────
+
+enum DriverWalletReason {
+  TRIP_EARNING         // Online trip: net earning credited after commission
+  COMMISSION_DEDUCTED  // Cash trip: commission debited (balance may go negative)
+  COMMISSION_PAID      // Driver paid outstanding commission (online or cash at office)
+  CASHBACK             // Platform cashback/reward
+  WITHDRAWAL           // Payout transferred to driver's bank account
+  ADMIN_CREDIT         // Manual admin adjustment (goodwill / error correction)
+  ADMIN_DEBIT          // Manual admin debit (reversal / clawback)
+  FLEET_SALARY         // Payment received from fleet owner via internal transfer
+  SUBSCRIPTION         // Monthly subscription deducted
+}
+
+enum WorkerWalletReason {
+  JOB_EARNING          // Job completed, earnings credited
+  COMMISSION_DEDUCTED  // Cash job: platform commission debited
+  COMMISSION_PAID      // Worker cleared outstanding commission
+  CASHBACK             // Platform reward
+  WITHDRAWAL           // Payout to bank
+  ADMIN_CREDIT         // Manual admin credit
+  ADMIN_DEBIT          // Manual admin debit
+}
+
+enum WithdrawalEntityType {
+  DRIVER
+  FLEET
+  WORKER
+}
+
+enum WithdrawalStatus {
+  PENDING           // Request created, funds reserved in wallet
+  AUTO_PROCESSING   // Sent to RazorpayX, awaiting webhook confirmation
+  COMPLETED         // RazorpayX confirmed, UTR received, money in bank
+  FAILED            // RazorpayX failed, funds returned to wallet
+  ADMIN_PENDING     // Escalated to admin for manual processing
+  ADMIN_COMPLETED   // Admin manually processed and confirmed
 }
 
 enum DriverStatus {
@@ -308,12 +350,22 @@ model Driver {
   dlVerifiedAt      DateTime?
   dlUlipRawResponse Json? // Raw SARATHI JSON response — legal audit trail
 
+  // ── Bank / Payout details (for RazorpayX withdrawals) ──
+  bankAccountNo          String? // Bank account number
+  bankIfsc               String? // IFSC code
+  bankName               String? // Bank name (e.g. "SBI", "HDFC")
+  bankAccountHolderName  String? // Name as per bank account
+  razorpayxContactId     String? // Cached RazorpayX contact ID — reused across payouts
+  razorpayxFundAccountId String? // Cached RazorpayX fund account ID — reused across payouts
+  bankVerified           Boolean @default(false) // True after penny-drop FAV passes
+
   bookings         Booking[]
   documents        DriverDocument[]
   earnings         DriverEarning[]
   bids             Bid[]
   fleetMemberships FleetDriver[]
   subscription     DriverSubscription?
+  driverWallet     DriverWallet?
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -344,9 +396,13 @@ model Worker {
   preferredTypes LaborType[] // What types of jobs this worker wants
 
   // Payout / bank details
-  bankAccountNo String?
-  bankIfsc      String?
-  bankName      String?
+  bankAccountNo          String?
+  bankIfsc               String?
+  bankName               String?
+  bankAccountHolderName  String?
+  razorpayxContactId     String?
+  razorpayxFundAccountId String?
+  bankVerified           Boolean @default(false)
 
   // KYC documents (S3 URLs)
   aadhaarUrl String?
@@ -356,6 +412,7 @@ model Worker {
   updatedAt DateTime @updatedAt
 
   jobAssignments JobAssignment[]
+  workerWallet   WorkerWallet?
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -969,6 +1026,16 @@ model FleetOwner {
   pan         String?
   isVerified  Boolean  @default(false)
   isActive    Boolean  @default(true)
+
+  // ── Bank / Payout details (for RazorpayX withdrawals) ──
+  bankAccountNo          String?
+  bankIfsc               String?
+  bankName               String?
+  bankAccountHolderName  String?
+  razorpayxContactId     String?
+  razorpayxFundAccountId String?
+  bankVerified           Boolean @default(false)
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1087,6 +1154,158 @@ model FleetTruckUsage {
   assignment   TruckAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
   @@map("fleet_truck_usage")
+}
+
+// ─────────────────────────────────────────────
+// DRIVER WALLET
+// ─────────────────────────────────────────────
+// cachedBalance CAN BE NEGATIVE: cash trips deduct commission
+// before driver clears the debt. This is intentional (Uber float model).
+
+model DriverWallet {
+  id            String   @id @default(uuid())
+  driverId      String   @unique
+  driver        Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  cachedBalance Float    @default(0)   // Running balance; can be negative
+  commissionDue Float    @default(0)   // Total unpaid cash-trip commission
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  transactions DriverWalletTransaction[]
+
+  @@map("driver_wallets")
+}
+
+model DriverWalletTransaction {
+  id           String             @id @default(uuid())
+  walletId     String
+  wallet       DriverWallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         WalletTransactionType  // CREDIT | DEBIT
+  reason       DriverWalletReason
+  amount       Float
+  balanceAfter Float
+  bookingId    String?            // Trip that triggered this transaction
+  referenceId  String?            // Razorpay payment_id, payout_id, or admin note ref
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([bookingId])
+  @@index([referenceId])
+  @@map("driver_wallet_transactions")
+}
+
+// ─────────────────────────────────────────────
+// WORKER WALLET
+// ─────────────────────────────────────────────
+
+model WorkerWallet {
+  id            String   @id @default(uuid())
+  workerId      String   @unique
+  worker        Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  cachedBalance Float    @default(0)
+  commissionDue Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  transactions WorkerWalletTransaction[]
+
+  @@map("worker_wallets")
+}
+
+model WorkerWalletTransaction {
+  id           String             @id @default(uuid())
+  walletId     String
+  wallet       WorkerWallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         WalletTransactionType
+  reason       WorkerWalletReason
+  amount       Float
+  balanceAfter Float
+  bookingId    String?
+  referenceId  String?
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([bookingId])
+  @@map("worker_wallet_transactions")
+}
+
+// ─────────────────────────────────────────────
+// WITHDRAWAL REQUESTS (Driver + Fleet + Worker)
+// ─────────────────────────────────────────────
+// Funds are reserved (deducted from wallet) when request is created.
+// On failure, funds are returned to wallet automatically.
+
+model WithdrawalRequest {
+  id           String               @id @default(uuid())
+  entityType   WithdrawalEntityType // DRIVER | FLEET | WORKER
+  entityId     String               // driverId | fleetOwnerId | workerId
+  amount       Float                // Amount in INR
+  status       WithdrawalStatus     @default(PENDING)
+
+  // Bank details snapshot at request time (immutable after creation)
+  bankAccountNo         String
+  bankIfsc              String
+  bankName              String
+  bankAccountHolderName String
+
+  // RazorpayX tracking
+  razorpayxContactId     String? // RazorpayX contact ID
+  razorpayxFundAccountId String? // RazorpayX fund account ID
+  razorpayxPayoutId      String? // Payout ID returned by RazorpayX
+  razorpayxUtr           String? // UTR number for bank reconciliation
+
+  // Admin override
+  adminNote   String?
+  processedBy String? // Admin userId who processed (manual flow)
+
+  requestedAt   DateTime  @default(now())
+  processedAt   DateTime?
+  failedAt      DateTime?
+  failureReason String?
+
+  @@index([entityType, entityId, status])
+  @@index([status, requestedAt])
+  @@index([razorpayxPayoutId])
+  @@map("withdrawal_requests")
+}
+
+// ─────────────────────────────────────────────
+// WEBHOOK IDEMPOTENCY GUARD
+// ─────────────────────────────────────────────
+// Prevents double-processing of Razorpay/RazorpayX webhook events.
+// NEVER delete rows from this table.
+
+model ProcessedWebhook {
+  id          String   @id @default(uuid())
+  eventId     String   @unique // x-razorpay-event-id header
+  eventType   String           // e.g. payment.captured, payout.processed
+  processedAt DateTime @default(now())
+
+  @@index([eventId])
+  @@map("processed_webhooks")
+}
+
+// ─────────────────────────────────────────────
+// ADMIN CASH COLLECTION RECORD
+// ─────────────────────────────────────────────
+// Created when admin records a driver/worker physically paying commission cash.
+// Also used when fleet owner records paying their driver in physical cash.
+
+model CashCollectionRecord {
+  id          String               @id @default(uuid())
+  entityType  WithdrawalEntityType // DRIVER | WORKER | FLEET
+  entityId    String               // driverId, workerId, or fleetOwnerId
+  bookingId   String?              // Specific booking this cash covers (optional)
+  amount      Float                // Amount received in cash (INR)
+  collectedBy String               // userId of admin/fleet owner who recorded this
+  note        String?              // e.g. "Driver came to office on 6 Jul 2026"
+  createdAt   DateTime             @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("cash_collection_records")
 }
 
 // ─────────────────────────────────────────────

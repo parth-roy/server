@@ -312,3 +312,80 @@ export async function verifyTopUp(
 
     return { message: 'Wallet topped up successfully', wallet: updatedWallet, amountCredited: creditAmount };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFUND — credited when an online-paid booking is cancelled
+// ─────────────────────────────────────────────────────────────────────────────
+export async function refundToWallet(userId: string, bookingId: string, amount: number) {
+    if (amount <= 0) throw AppError.badRequest('Refund amount must be positive');
+
+    // Idempotency: never double-refund the same booking
+    const existingRefund = await prisma.walletTransaction.findFirst({
+        where: {
+            referenceId: `REFUND_${bookingId}`,
+            reason: WalletTransactionReason.REFUND,
+        },
+    });
+    if (existingRefund) {
+        return { message: 'Already refunded', refundAmount: amount };
+    }
+
+    let wallet = await prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) {
+        wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
+    }
+
+    const newBalance = wallet.cachedBalance + amount;
+
+    const [updatedWallet] = await prisma.$transaction([
+        prisma.wallet.update({ where: { userId }, data: { cachedBalance: newBalance } }),
+        prisma.walletTransaction.create({
+            data: {
+                walletId: wallet.id,
+                type: WalletTransactionType.CREDIT,
+                reason: WalletTransactionReason.REFUND,
+                amount,
+                balanceAfter: newBalance,
+                referenceId: `REFUND_${bookingId}`,
+                note: `Refund for cancelled booking`,
+            },
+        }),
+    ]);
+
+    return { message: 'Refund credited to wallet', wallet: updatedWallet, refundAmount: amount };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CASHBACK — credited for rewards, promotions, referrals
+// ─────────────────────────────────────────────────────────────────────────────
+export async function creditCashback(userId: string, amount: number, referenceId: string, note?: string) {
+    if (amount <= 0) return;
+
+    // Idempotency: never double-credit the same reward
+    const existing = await prisma.walletTransaction.findFirst({
+        where: { referenceId, reason: WalletTransactionReason.CASHBACK },
+    });
+    if (existing) return;
+
+    let wallet = await prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) {
+        wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
+    }
+
+    const newBalance = wallet.cachedBalance + amount;
+
+    await prisma.$transaction([
+        prisma.wallet.update({ where: { userId }, data: { cachedBalance: newBalance } }),
+        prisma.walletTransaction.create({
+            data: {
+                walletId: wallet.id,
+                type: WalletTransactionType.CREDIT,
+                reason: WalletTransactionReason.CASHBACK,
+                amount,
+                balanceAfter: newBalance,
+                referenceId,
+                note: note ?? `Cashback credited`,
+            },
+        }),
+    ]);
+}

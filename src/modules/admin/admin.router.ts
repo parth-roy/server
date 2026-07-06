@@ -107,3 +107,18 @@ adminRouter.get('/ulip-logs/:id',                     ctrl.getUlipLog);
 
 // ── System ────────────────────────────────────────────────────────────────────
 adminRouter.get('/system/health',                     ctrl.systemHealth);
+
+// ── Driver Wallet & Commission Management ─────────────────────────────────────
+import {
+  adminListDriverWallets,
+  adminRecordCashCollection,
+  adminListWithdrawals,
+  adminCompleteWithdrawalManually,
+  adminRetryWithdrawal,
+} from '@modules/driver-wallet/driver-wallet.controller';
+
+adminRouter.get('/driver-wallets',                    adminListDriverWallets);
+adminRouter.post('/cash-collection',                  adminRecordCashCollection);
+adminRouter.get('/withdrawals',                       adminListWithdrawals);
+adminRouter.patch('/withdrawals/:id/complete',        adminCompleteWithdrawalManually);
+adminRouter.patch('/withdrawals/:id/retry',           adminRetryWithdrawal);

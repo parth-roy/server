@@ -2,7 +2,7 @@ import { prisma } from '@shared/db/prisma';
 import { earnCoins } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { NotificationType } from '@prisma/client';
-import { PrismaClient, BookingStatus, UserRole } from '@prisma/client';
+import { PrismaClient, BookingStatus, UserRole, PaymentMethod } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { AppError } from '@shared/errors/AppError';
 import { eventBus } from '@shared/eventbus';
@@ -13,6 +13,8 @@ import { pricingService } from '@modules/pricing/pricing.service';
 import type { FareEstimateResponse } from '@modules/pricing/pricing.types';
 import { handleDriverDecline } from '@modules/dispatch/dispatch.service';
 import { checkServiceability } from '@modules/maps/serviceability.service';
+import { settleTripEarnings } from '@modules/driver-wallet/driver-wallet.service';
+import { refundToWallet } from '@modules/wallet/wallet.service';
 import type {
     CreateBookingInput,
     CancelBookingInput,
@@ -451,6 +453,24 @@ export async function cancelBooking(
         reason: data.reason,
     });
 
+    // ── AUTO REFUND: if customer paid via wallet, refund instantly ────────────
+    // Uses fire-and-forget to not block the cancellation response.
+    const fullBooking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { paymentStatus: true, paymentMethod: true, grandTotal: true, totalFare: true, customerId: true },
+    });
+    if (
+        fullBooking?.paymentStatus === 'PAID' &&
+        fullBooking?.paymentMethod === PaymentMethod.WALLET
+    ) {
+        const refundAmount = fullBooking.grandTotal ?? fullBooking.totalFare ?? 0;
+        if (refundAmount > 0) {
+            refundToWallet(fullBooking.customerId, bookingId, refundAmount).catch((err) => {
+                logger.error(`[Refund] Wallet refund failed for booking ${bookingId}:`, err);
+            });
+        }
+    }
+
     logger.info(`Booking cancelled: ${updated.bookingNumber} by ${userId}`);
     return updated;
 }
@@ -755,7 +775,7 @@ export async function verifyPodAndDeliverStop(
 // ─────────────────────────────────────────────
 
 export async function completeBooking(bookingId: string, userId: string) {
-    const { booking } = await getDriverBooking(bookingId, userId);
+    const { booking, driver } = await getDriverBooking(bookingId, userId);
     assertTransition(booking.status, BookingStatus.COMPLETED);
 
     const updated = await prisma.booking.update({
@@ -765,6 +785,35 @@ export async function completeBooking(bookingId: string, userId: string) {
     });
 
     logger.info(`Booking completed: ${updated.bookingNumber}`);
+
+    // ── PHASE 9: Commission Settlement ───────────────────────────────────────
+    // Settle earnings and commissions asynchronously after status update.
+    // We use fire-and-forget here so that a settlement error never blocks the
+    // driver from marking the trip complete. Any error is logged + monitored.
+    const grandTotal = booking.grandTotal ?? booking.totalFare ?? 0;
+    const paymentMethod = booking.paymentMethod ?? PaymentMethod.CASH;
+
+    if (grandTotal > 0 && driver) {
+        // Find if this is a fleet booking
+        const fleetMembership = await prisma.fleetDriver.findFirst({
+            where: { driverId: driver.id, isActive: true },
+            select: { fleetOwnerId: true },
+        });
+
+        settleTripEarnings({
+            bookingId,
+            driverId:    driver.id,
+            grossAmount: grandTotal,
+            paymentMethod,
+            fleetOwnerId: fleetMembership?.fleetOwnerId,
+        }).catch((err) => {
+            logger.error(`[Settlement] Failed for booking ${bookingId}:`, err);
+            // TODO: Push to a dead-letter queue for manual reconciliation
+        });
+    } else {
+        logger.warn(`[Settlement] Skipped for booking ${bookingId} — no fare amount or driver`);
+    }
+
     return updated;
 }
 

@@ -29,8 +29,11 @@ import { ulipRouter } from '@modules/ulip/ulip.router';
 import { subscriptionRouter } from '@modules/subscription/subscription.router';
 import { adminRouter } from '@modules/admin/admin.router';
 import { workforceRouter } from '@modules/workforce/workforce.router';
+import { driverWalletRouter } from '@modules/driver-wallet/driver-wallet.router';
+import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
+import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 
 export function createApp(): Application {
   const app = express();
@@ -66,6 +69,13 @@ export function createApp(): Application {
     '/api/v1/payments/webhook',
     express.raw({ type: 'application/json' }),
     razorpayWebhook,
+  );
+
+  // ── RazorpayX Payout webhook — also needs raw body ───────────────────────
+  app.post(
+    '/api/v1/webhooks/razorpayx',
+    express.raw({ type: 'application/json' }),
+    handleRazorpayXWebhook,
   );
 
   // All other routes use parsed JSON body
@@ -168,6 +178,8 @@ export function createApp(): Application {
   app.use('/api/v1/subscription', subscriptionRouter);
   app.use('/api/v1/admin',        adminRouter);
   app.use('/api/v1/workforce',    workforceRouter);
+  app.use('/api/v1/driver/wallet', driverWalletRouter);
+  app.use('/api/v1/fleet/wallet',  fleetWalletRouter);
 
 
   app.use(notFoundHandler);
