@@ -92,3 +92,7 @@ workforceRouter.get('/badges', ctrl.getBadges);
 // ─────────────────────────────────────────────
 workforceRouter.get('/training/courses', ctrl.getTrainingCourses);
 
+// ─────────────────────────────────────────────
+// ANNOUNCEMENTS
+// ─────────────────────────────────────────────
+workforceRouter.get('/announcements', ctrl.getAnnouncements);

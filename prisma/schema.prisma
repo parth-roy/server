@@ -984,6 +984,8 @@ model Announcement {
   endsAt    DateTime?
   createdAt DateTime  @default(now())
 
+  target    String    @default("CUSTOMER")
+
   @@map("announcements")
 }
 

@@ -139,13 +139,14 @@ export const pricingUpdateSchema = z.object({
 });
 
 export const announcementSchema = z.object({
-  title:    z.string().min(1).max(100),
-  body:     z.string().min(1).max(500),
+  title: z.string().min(1, 'Title is required'),
+  body: z.string().min(1, 'Body is required'),
   imageUrl: z.string().url().optional(),
-  linkUrl:  z.string().url().optional(),
+  linkUrl: z.string().url().optional(),
   isActive: z.boolean().default(true),
+  target: z.string().default('CUSTOMER'),
   startsAt: z.string().datetime().optional(),
-  endsAt:   z.string().datetime().optional(),
+  endsAt: z.string().datetime().optional(),
 });
 
 export const broadcastNotificationSchema = z.object({

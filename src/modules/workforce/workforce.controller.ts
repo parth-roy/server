@@ -237,3 +237,10 @@ export async function getTrainingCourses(req: Request, res: Response, next: Next
   } catch (err) { next(err); }
 }
 
+export async function getAnnouncements(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.getAnnouncements();
+    sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+

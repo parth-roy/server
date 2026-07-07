@@ -488,136 +488,109 @@ export async function getActiveJob(userId: string) {
 }
 
 // ─────────────────────────────────────────────
-// JOBS — ACCEPT (Critical: race-condition safe)
+// JOBS — ACCEPT
 // ─────────────────────────────────────────────
-export async function acceptJob(userId: string, assignmentId: string) {
+export async function acceptJob(userId: string, bookingId: string) {
   const worker = await prisma.worker.findUnique({
     where: { userId },
     select: { id: true, status: true, isDocVerified: true },
   });
   if (!worker) throw AppError.notFound('Worker not found');
-  // if (!worker.isDocVerified) throw AppError.badRequest('Documents not verified', 'DOCS_UNVERIFIED'); // Temporarily bypassed
   if (worker.status === WorkerStatus.ON_JOB) throw AppError.conflict('Already on an active job', 'ON_JOB');
 
-  // Load assignment — verify it belongs to this worker and is still pending
-  const assignment = await prisma.jobAssignment.findUnique({
-    where: { id: assignmentId },
-    select: {
-      id: true, status: true, workerId: true, bookingId: true, payoutAmount: true,
-      booking: { select: { laborersCount: true, laborRequired: true, status: true } },
-    },
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: { id: true, laborersCount: true, laborRequired: true, status: true, laborCharge: true },
   });
 
-  if (!assignment) throw AppError.notFound('Assignment not found');
-  if (assignment.workerId !== worker.id) throw AppError.forbidden('Assignment does not belong to you');
-  if (!assignment.booking.laborRequired) throw AppError.badRequest('Booking does not require labor');
-  if (assignment.status !== WorkerJobStatus.PENDING_ACCEPTANCE) {
-    throw AppError.conflict(
-      assignment.status === WorkerJobStatus.DECLINED ? 'You already declined this job' : 'Assignment already responded',
-      'ALREADY_RESPONDED',
-    );
-  }
+  if (!booking) throw AppError.notFound('Booking not found');
+  if (!booking.laborRequired) throw AppError.badRequest('Booking does not require labor');
 
-  // Check if job is already full (pre-flight check — reduces contention)
+  // Check if job is already full
   const acceptedCount = await prisma.jobAssignment.count({
     where: {
-      bookingId: assignment.bookingId,
+      bookingId,
       status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
     },
   });
-  const totalSlots = assignment.booking.laborersCount ?? 1;
+  const totalSlots = booking.laborersCount ?? 1;
   if (acceptedCount >= totalSlots) {
     throw AppError.conflict('This job is already full', 'JOB_FULL');
   }
 
-  // ATOMIC ACCEPT: updateMany with status guard — only succeeds if still PENDING_ACCEPTANCE
-  // This is the race-condition safety net. If 10 workers try simultaneously,
-  // only the first N (up to totalSlots) succeed. The rest get count=0 and fail.
-  const result = await prisma.jobAssignment.updateMany({
-    where: {
-      id: assignmentId,
-      status: WorkerJobStatus.PENDING_ACCEPTANCE, // ← Atomic guard
+  const existing = await prisma.jobAssignment.findFirst({
+    where: { bookingId, workerId: worker.id },
+  });
+  if (existing) throw AppError.conflict('Already responded to this job');
+
+  const assignment = await prisma.jobAssignment.create({
+    data: {
+      bookingId,
+      workerId: worker.id,
+      status: WorkerJobStatus.ACCEPTED,
+      payoutAmount: booking.laborCharge ?? 0,
+      assignedAt: new Date(),
     },
-    data: { status: WorkerJobStatus.ACCEPTED },
   });
 
-  if (result.count === 0) {
-    // Another worker claimed the last slot at the same millisecond
-    throw AppError.conflict('Job slot was just filled by another worker', 'JOB_FULL');
-  }
-
-  // Update worker status to ON_JOB
   await prisma.worker.update({
     where: { id: worker.id },
     data: { status: WorkerStatus.ON_JOB },
   });
 
-  // Re-count to check if all slots are now filled
-  const newAcceptedCount = await prisma.jobAssignment.count({
-    where: {
-      bookingId: assignment.bookingId,
-      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
-    },
-  });
-
-  const allSlotsFilled = newAcceptedCount >= totalSlots;
-  if (allSlotsFilled) {
-    // Notify booking room that all workers are assigned
-    emitToBookingRoom(assignment.bookingId, 'workers_fully_assigned', {
-      bookingId: assignment.bookingId,
+  const newAcceptedCount = acceptedCount + 1;
+  if (newAcceptedCount >= totalSlots) {
+    emitToBookingRoom(bookingId, 'workers_fully_assigned', {
+      bookingId,
       workerCount: newAcceptedCount,
     });
   }
 
-  // FCM confirmation to worker
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
   if (user?.fcmToken) {
     notificationService.sendToDevice(user.fcmToken, {
       title: '✅ Job Confirmed!',
       body: `You have accepted the job. Head to the pickup location. Payout: ₹${assignment.payoutAmount}`,
-      data: { type: 'JOB_ACCEPTED', assignmentId },
+      data: { type: 'JOB_ACCEPTED', assignmentId: assignment.id },
     }).catch(err => logger.error('[Workforce] FCM accept notification failed:', err));
   }
 
-  await createNotification(
-    userId,
-    '✅ Job Confirmed!',
-    `You have accepted the job. Payout: ₹${assignment.payoutAmount}`,
-    NotificationType.BOOKING_STATUS,
-    assignment.bookingId,
-  );
-
-  logger.info(`[Workforce] Worker ${worker.id} accepted assignment ${assignmentId} (${newAcceptedCount}/${totalSlots} slots filled)`);
-  return { accepted: true, allSlotsFilled, slotsFilledCount: newAcceptedCount };
+  return { accepted: true, assignment, allSlotsFilled: newAcceptedCount >= totalSlots };
 }
 
 // ─────────────────────────────────────────────
 // JOBS — DECLINE
 // ─────────────────────────────────────────────
-export async function declineJob(userId: string, assignmentId: string, input: DeclineJobInput) {
+export async function declineJob(userId: string, bookingId: string, input: DeclineJobInput) {
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true, totalJobs: true, acceptanceRate: true } });
   if (!worker) throw AppError.notFound('Worker not found');
 
-  const assignment = await prisma.jobAssignment.findUnique({
-    where: { id: assignmentId },
-    select: { id: true, workerId: true, status: true, bookingId: true },
+  const existing = await prisma.jobAssignment.findFirst({
+    where: { bookingId, workerId: worker.id },
   });
-  if (!assignment) throw AppError.notFound('Assignment not found');
-  if (assignment.workerId !== worker.id) throw AppError.forbidden('Assignment does not belong to you');
-  if (assignment.status !== WorkerJobStatus.PENDING_ACCEPTANCE) {
-    throw AppError.conflict('Assignment is no longer pending', 'ALREADY_RESPONDED');
+
+  if (!existing) {
+    await prisma.jobAssignment.create({
+      data: {
+        bookingId,
+        workerId: worker.id,
+        status: WorkerJobStatus.DECLINED,
+        payoutAmount: 0,
+        declinedAt: new Date(),
+        declineReason: input?.reason,
+      },
+    });
+  } else {
+    await prisma.jobAssignment.update({
+      where: { id: existing.id },
+      data: {
+        status: WorkerJobStatus.DECLINED,
+        declinedAt: new Date(),
+        declineReason: input?.reason,
+      },
+    });
   }
 
-  await prisma.jobAssignment.update({
-    where: { id: assignmentId },
-    data: {
-      status: WorkerJobStatus.DECLINED,
-      declinedAt: new Date(),
-      declineReason: input.reason,
-    },
-  });
-
-  // Recalculate acceptance rate
   const allAssignments = await prisma.jobAssignment.count({ where: { workerId: worker.id, status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.COMPLETED, WorkerJobStatus.DECLINED] } } });
   const declinedCount = await prisma.jobAssignment.count({ where: { workerId: worker.id, status: WorkerJobStatus.DECLINED } });
   const newRate = allAssignments > 0 ? Math.round(((allAssignments - declinedCount) / allAssignments) * 100) : 100;
@@ -627,7 +600,6 @@ export async function declineJob(userId: string, assignmentId: string, input: De
     data: { acceptanceRate: newRate },
   });
 
-  logger.info(`[Workforce] Worker ${worker.id} declined assignment ${assignmentId}. Rate: ${newRate}%`);
   return { declined: true };
 }
 
@@ -1374,4 +1346,11 @@ export async function getTrainingCourses() {
       },
     ],
   };
+}
+
+export async function getAnnouncements() {
+  return prisma.announcement.findMany({
+    where: { isActive: true, target: 'WORKFORCE' },
+    orderBy: { createdAt: 'desc' },
+  });
 }
