@@ -901,6 +901,7 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       bookingNumber: true,
       pickupLat: true,
       pickupLng: true,
+      pickupAddress: true,
       laborCharge: true,
       laborType: true,
       laborersCount: true,

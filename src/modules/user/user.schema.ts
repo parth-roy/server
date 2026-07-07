@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const updateProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
   email: z.string().email('Invalid email address').optional(),
+  profileImageUrl: z.string().url('Invalid image URL').optional(),
   language: z.enum(['en', 'hi', 'bn']).optional(),
   fcmToken: z.string().min(1).optional(),
   usageType: z.enum(['Business Usage', 'Personal Usage', 'House Shifting Usage']).optional(),
