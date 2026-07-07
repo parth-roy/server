@@ -373,20 +373,24 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   });
   if (!worker) throw AppError.notFound('Worker not found');
 
-  const { page, limit, laborType, sortBy } = query;
+  const { page, limit, laborType, sortBy, minPayout, maxDistance } = query;
   const skip = (page - 1) * limit;
 
-  // Build laborType filter: match bookings with compatible laborType
+  // Build laborType filter
   let laborTypeFilter: any = {};
   if (laborType) {
     laborTypeFilter = { laborType: { in: [laborType as LaborType, LaborType.BOTH] } };
   }
 
-  // Get bookings that need workers and have open slots
+  // Build minPayout filter at DB level (pushed into Prisma — zero network waste)
+  const payoutFilter: any = minPayout != null ? { laborCharge: { gte: minPayout } } : {};
+
+  // Fetch from DB — extra headroom because we filter open slots in memory
   const bookings = await prisma.booking.findMany({
     where: {
       laborRequired: true,
       ...laborTypeFilter,
+      ...payoutFilter,
       status: {
         in: ['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'] as any[],
       },
@@ -408,12 +412,12 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       },
     },
     skip,
-    take: limit * 3, // Fetch extra because we'll filter by open slots
+    take: limit * 3, // Extra headroom to account for in-memory slot filtering
     orderBy: { createdAt: 'desc' },
   });
 
-  // Filter: only bookings with open slots, and worker not already assigned
-  const openBookings = bookings
+  // In-memory: filter open slots, exclude self, compute distance
+  let openBookings = bookings
     .filter(b => {
       const acceptedCount = b.jobAssignments.length;
       const totalSlots = b.laborersCount ?? 1;
@@ -429,29 +433,39 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       const totalSlots = b.laborersCount ?? 1;
 
       return {
-        id: b.id,
-        bookingNumber: b.bookingNumber,
-        pickupAddress: b.pickupAddress,
-        dropAddress: b.stops[0]?.address ?? 'Destination',
-        laborType: b.laborType,
-        payoutAmount: b.laborCharge ?? 0,
+        id:             b.id,
+        bookingNumber:  b.bookingNumber,
+        pickupAddress:  b.pickupAddress,
+        dropAddress:    b.stops[0]?.address ?? 'Destination',
+        laborType:      b.laborType,
+        payoutAmount:   b.laborCharge ?? 0,
         slotsRemaining: totalSlots - acceptedCount,
         totalSlots,
         distanceKm,
-        createdAt: b.createdAt,
+        createdAt:      b.createdAt,
       };
     });
+
+  // Apply maxDistance filter after haversine (can't do in DB without PostGIS)
+  if (maxDistance != null && worker.currentLat != null) {
+    openBookings = openBookings.filter(b => b.distanceKm == null || b.distanceKm <= maxDistance);
+  }
 
   // Sort
   if (sortBy === 'distance' && worker.currentLat != null) {
     openBookings.sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
   } else if (sortBy === 'payout') {
     openBookings.sort((a, b) => b.payoutAmount - a.payoutAmount);
+  } else if (sortBy === 'recent') {
+    openBookings.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
+  const total = openBookings.length;
+  const paginated = openBookings.slice(0, limit);
+
   return {
-    jobs: openBookings.slice(0, limit),
-    meta: { page, limit, hasMore: openBookings.length > limit },
+    jobs: paginated,
+    meta: { page, limit, hasMore: total > limit, total },
   };
 }
 
