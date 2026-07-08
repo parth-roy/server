@@ -5,6 +5,7 @@ import { env } from '@config/env';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
+import { gamificationService } from '@modules/gamification/gamification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType } from '@prisma/client';
 import { emitToWorkerRoom, emitToBookingRoom } from '@shared/socket/socket.instance';
@@ -1241,77 +1242,9 @@ export async function getSafetyAlerts() {
 // BADGES (mock — no DB tables yet)
 // ─────────────────────────────────────────────
 export async function getBadges(userId: string) {
-  const worker = await prisma.worker.findUnique({
-    where: { userId },
-    select: { totalJobs: true, rating: true, acceptanceRate: true },
-  });
-  if (!worker) throw AppError.notFound('Worker not found');
-
-  const { totalJobs, rating, acceptanceRate } = worker;
-
-  // Compute which badges are earned dynamically from real worker stats
-  const badges = [
-    {
-      id: 'first_job',
-      name: 'First Step',
-      description: 'Completed your very first job',
-      icon: '🏅',
-      tier: 'BRONZE',
-      earned: totalJobs >= 1,
-      earnedAt: totalJobs >= 1 ? null : undefined,
-    },
-    {
-      id: 'ten_jobs',
-      name: 'Rising Star',
-      description: 'Completed 10 jobs',
-      icon: '⭐',
-      tier: 'SILVER',
-      earned: totalJobs >= 10,
-    },
-    {
-      id: 'fifty_jobs',
-      name: 'Veteran Loader',
-      description: 'Completed 50 jobs',
-      icon: '🥈',
-      tier: 'GOLD',
-      earned: totalJobs >= 50,
-    },
-    {
-      id: 'hundred_jobs',
-      name: 'Century Club',
-      description: 'Completed 100 jobs',
-      icon: '💯',
-      tier: 'PLATINUM',
-      earned: totalJobs >= 100,
-    },
-    {
-      id: 'high_rating',
-      name: 'Top Rated',
-      description: 'Maintained a rating of 4.8 or above',
-      icon: '⭐',
-      tier: 'GOLD',
-      earned: (rating ?? 0) >= 4.8,
-    },
-    {
-      id: 'high_acceptance',
-      name: 'Reliable Worker',
-      description: 'Maintained an acceptance rate above 90%',
-      icon: '✅',
-      tier: 'SILVER',
-      earned: (acceptanceRate ?? 0) >= 90,
-    },
-  ];
-
-  const earned = badges.filter(b => b.earned);
-  const locked = badges.filter(b => !b.earned);
-
-  // Tier level based on total jobs
-  let tier = 'BRONZE';
-  if (totalJobs >= 100) tier = 'PLATINUM';
-  else if (totalJobs >= 50) tier = 'GOLD';
-  else if (totalJobs >= 10) tier = 'SILVER';
-
-  return { tier, totalEarned: earned.length, earned, locked };
+  const result = await gamificationService.getBadgesForWorker(userId);
+  if (!result) throw AppError.notFound('Worker not found');
+  return result;
 }
 
 // ─────────────────────────────────────────────

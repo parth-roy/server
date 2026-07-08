@@ -400,6 +400,10 @@ model Worker {
   preferredDistance Int         @default(25)
   languages         String[]    @default(["Hindi", "English"]) // e.g. ["Hindi", "English"]
 
+  // Gamification
+  gamificationPoints Int     @default(0)
+  gamificationTier   BadgeTier @default(BRONZE)
+  
   // Payout / bank details
   bankAccountNo          String?
   bankIfsc               String?
@@ -418,10 +422,41 @@ model Worker {
 
   jobAssignments JobAssignment[]
   workerWallet   WorkerWallet?
+  workerBadges   WorkerBadge[]
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
   @@map("workers")
+}
+
+model Badge {
+  id           String      @id @default(uuid())
+  code         String      @unique // e.g., "FIRST_STEP", "CENTURY_CLUB"
+  name         String
+  description  String
+  icon         String      // e.g., "Icons.check_circle" or url
+  tier         BadgeTier
+  metric       BadgeMetric
+  targetValue  Float
+  pointsReward Int         @default(0)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+
+  workerBadges WorkerBadge[]
+}
+
+model WorkerBadge {
+  id        String    @id @default(uuid())
+  workerId  String
+  badgeId   String
+  progress  Float     @default(0)
+  isEarned  Boolean   @default(false)
+  earnedAt  DateTime?
+
+  worker    Worker    @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  badge     Badge     @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, badgeId])
 }
 
 model JobAssignment {
@@ -1429,4 +1464,21 @@ model FleetTruckDocument {
   status     DocumentStatus @default(PENDING)
 
   @@map("fleet_truck_documents")
+}
+
+
+enum BadgeTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+  DIAMOND
+}
+
+enum BadgeMetric {
+  TOTAL_JOBS
+  RATING
+  ACCEPTANCE_RATE
+  ON_TIME_RATE
+  TOTAL_EARNINGS
 }

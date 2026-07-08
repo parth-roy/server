@@ -122,3 +122,10 @@ adminRouter.post('/cash-collection',                  adminRecordCashCollection)
 adminRouter.get('/withdrawals',                       adminListWithdrawals);
 adminRouter.patch('/withdrawals/:id/complete',        adminCompleteWithdrawalManually);
 adminRouter.patch('/withdrawals/:id/retry',           adminRetryWithdrawal);
+
+//  Gamification & Badges 
+import * as gamificationCtrl from './gamification.admin.controller';
+adminRouter.get('/gamification/badges', gamificationCtrl.listBadges);
+adminRouter.post('/gamification/badges', gamificationCtrl.createBadge);
+adminRouter.patch('/gamification/badges/:id', gamificationCtrl.updateBadge);
+adminRouter.get('/gamification/stats', gamificationCtrl.getGamificationStats);
