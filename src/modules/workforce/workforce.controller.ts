@@ -150,10 +150,31 @@ export async function updateLocation(req: Request, res: Response, next: NextFunc
   } catch (err) { next(err); }
 }
 
+export async function updateBankDetails(req: Request, res: Response, next: NextFunction) {
+  try {
+    await service.updateBankDetails(req.user!.id, req.body);
+    sendSuccess(res, { updated: true });
+  } catch (err) { next(err); }
+}
+
 export async function updatePreferences(req: Request, res: Response, next: NextFunction) {
   try {
     const result = await service.updatePreferences(req.user!.id, req.body);
     sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+
+export async function updateSettings(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.updateSettings(req.user!.id, req.body);
+    sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+
+export async function deleteAccount(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.deleteAccount(req.user!.id);
+    sendSuccess(res, result, 'Account successfully deleted');
   } catch (err) { next(err); }
 }
 

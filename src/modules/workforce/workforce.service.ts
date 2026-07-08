@@ -16,7 +16,9 @@ import type {
   VerifyOtpInput,
   UpdateStatusInput,
   UpdateLocationInput,
+  UpdateBankDetailsInput,
   UpdatePreferencesInput,
+  UpdateSettingsInput,
   UploadDocumentsInput,
   AvailableJobsQuery,
   DeclineJobInput,
@@ -243,10 +245,25 @@ export async function updateLocation(userId: string, input: UpdateLocationInput)
     }).catch(err => logger.error('[Workforce] DB location fallback write failed:', err));
   });
 }
+// ─────────────────────────────────────────────
+export async function updateBankDetails(userId: string, input: UpdateBankDetailsInput): Promise<void> {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true, bankVerified: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+  if (worker.bankVerified) throw AppError.badRequest('Bank details already verified. Contact support to change.');
 
-// ─────────────────────────────────────────────
-// PROFILE — UPDATE PREFERENCES & BANK DETAILS
-// ─────────────────────────────────────────────
+  await prisma.worker.update({
+    where: { id: worker.id },
+    data: {
+      bankAccountNo: input.bankAccountNo,
+      bankIfsc: input.bankIfsc.toUpperCase(),
+      bankName: input.bankName,
+      bankAccountHolderName: input.bankAccountHolderName,
+    }
+  });
+}
+
+// ── PROFILE - UPDATE PREFERENCES & BANK DETAILS
+// ─────────────────────────────────────────────────────────────────────────────
 export async function updatePreferences(userId: string, input: UpdatePreferencesInput) {
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   if (!worker) throw AppError.notFound('Worker not found');
@@ -1256,4 +1273,28 @@ export async function getAnnouncements() {
     where: { isActive: true, target: 'WORKFORCE' },
     orderBy: { createdAt: 'desc' },
   });
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS & ACCOUNT MANAGEMENT
+// ─────────────────────────────────────────────
+export async function updateSettings(userId: string, input: UpdateSettingsInput) {
+  await prisma.user.update({
+    where: { id: userId },
+    data: input,
+  });
+  return getMe(userId);
+}
+
+export async function deleteAccount(userId: string) {
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  // Soft delete both User and Worker
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { isActive: false } }),
+    prisma.worker.update({ where: { id: worker.id }, data: { isActive: false, status: 'OFFLINE' } }),
+  ]);
+
+  return { deleted: true };
 }

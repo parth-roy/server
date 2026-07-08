@@ -62,6 +62,12 @@ adminRouter.get('/fleet-owners',                      ctrl.listFleetOwners);
 adminRouter.get('/fleet-owners/:id',                  ctrl.getFleetOwner);
 adminRouter.patch('/fleet-owners/:id/status',         ctrl.setFleetOwnerStatus);
 
+// ── Workforce ─────────────────────────────────────────────────────────────────
+import * as workforceAdminCtrl from '@modules/workforce/workforce.admin.controller';
+adminRouter.get('/workforce',                         workforceAdminCtrl.listWorkforce);
+adminRouter.get('/workforce/:id',                     workforceAdminCtrl.getWorker);
+adminRouter.patch('/workforce/:id/bank',              workforceAdminCtrl.updateWorkerBankDetails);
+
 // ── Fleet Trucks ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-trucks/expiring',             ctrl.getExpiringTrucks);  // BEFORE /:id
 adminRouter.get('/fleet-trucks',                      ctrl.listFleetTrucks);

@@ -8,7 +8,9 @@ import {
   VerifyOtpSchema,
   UpdateStatusSchema,
   UpdateLocationSchema,
+  UpdateBankDetailsSchema,
   UpdatePreferencesSchema,
+  UpdateSettingsSchema,
   UploadDocumentsSchema,
   AvailableJobsQuerySchema,
   DeclineJobSchema,
@@ -69,7 +71,10 @@ workforceRouter.post('/wallet/withdraw',        validate(WithdrawSchema), ctrl.w
 workforceRouter.get('/profile/me',                                                        ctrl.getMe);
 workforceRouter.patch('/profile/status',      validate(UpdateStatusSchema),               ctrl.updateStatus);
 workforceRouter.patch('/profile/location',    validate(UpdateLocationSchema),             ctrl.updateLocation);
+workforceRouter.patch('/profile/bank-details',validate(UpdateBankDetailsSchema),          ctrl.updateBankDetails);
 workforceRouter.put('/profile/preferences',   validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.patch('/profile/settings',    validate(UpdateSettingsSchema),             ctrl.updateSettings);
+workforceRouter.delete('/profile/account',                                                ctrl.deleteAccount);
 workforceRouter.post('/profile/documents',    validate(UploadDocumentsSchema),            ctrl.uploadDocuments);
 
 // ─────────────────────────────────────────────

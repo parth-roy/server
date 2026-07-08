@@ -4,7 +4,7 @@ import { trainingService } from "./training.service";
 export class TrainingWorkforceController {
   async getCourses(req: Request, res: Response) {
     try {
-      const workerId = (req as any).user.workerId; // Assuming workforce auth attaches workerId
+      const workerId = (req as any).user?.id; // Assuming workforce auth attaches id
       if (!workerId) {
          return res.status(403).json({ success: false, message: "Worker ID not found in token" });
       }
@@ -18,7 +18,7 @@ export class TrainingWorkforceController {
 
   async updateProgress(req: Request, res: Response) {
     try {
-      const workerId = (req as any).user.workerId;
+      const workerId = (req as any).user?.id;
       if (!workerId) {
          return res.status(403).json({ success: false, message: "Worker ID not found in token" });
       }

@@ -206,10 +206,11 @@ model User {
   name            String?
   email           String?  @unique
   profileImageUrl String?
-  role            UserRole @default(CUSTOMER)
-  isActive        Boolean  @default(true)
-  language        String   @default("en")
-  fcmToken        String?
+  role                 UserRole @default(CUSTOMER)
+  isActive             Boolean  @default(true)
+  language             String   @default("en")
+  notificationsEnabled Boolean  @default(true)
+  fcmToken             String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

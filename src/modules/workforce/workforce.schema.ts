@@ -29,6 +29,13 @@ export const UpdateLocationSchema = z.object({
   lng: z.number().min(-180).max(180),
 });
 
+export const UpdateBankDetailsSchema = z.object({
+  bankAccountNo: z.string().min(5, 'Account number must be at least 5 digits').max(30),
+  bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code'),
+  bankName: z.string().min(2, 'Bank name is required'),
+  bankAccountHolderName: z.string().min(2, 'Account holder name is required'),
+});
+
 export const UpdatePreferencesSchema = z.object({
   name: z.string().min(2).max(80).optional(),
   maxWeightKg: z.number().min(1).max(50000).optional(),
@@ -115,9 +122,16 @@ export const SosSchema = z.object({
 // Type exports
 export type SendOtpInput = z.infer<typeof SendOtpSchema>;
 export type VerifyOtpInput = z.infer<typeof VerifyOtpSchema>;
+export const UpdateSettingsSchema = z.object({
+  language: z.string().optional(),
+  notificationsEnabled: z.boolean().optional(),
+});
+
 export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;
 export type UpdateLocationInput = z.infer<typeof UpdateLocationSchema>;
+export type UpdateBankDetailsInput = z.infer<typeof UpdateBankDetailsSchema>;
 export type UpdatePreferencesInput = z.infer<typeof UpdatePreferencesSchema>;
+export type UpdateSettingsInput = z.infer<typeof UpdateSettingsSchema>;
 export type UploadDocumentsInput = z.infer<typeof UploadDocumentsSchema>;
 export type AvailableJobsQuery = z.infer<typeof AvailableJobsQuerySchema>;
 export type DeclineJobInput = z.infer<typeof DeclineJobSchema>;
