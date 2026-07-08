@@ -1248,58 +1248,8 @@ export async function getBadges(userId: string) {
 }
 
 // ─────────────────────────────────────────────
-// TRAINING COURSES (mock — no DB tables yet)
+// TRAINING COURSES (Moved to Dedicated Module)
 // ─────────────────────────────────────────────
-export async function getTrainingCourses() {
-  return {
-    courses: [
-      {
-        id: 'tc_1',
-        title: 'Safe Lifting Techniques',
-        description: 'Learn the correct way to lift heavy objects without injuring yourself.',
-        durationMinutes: 15,
-        thumbnail: 'https://cdn.parther.app/training/lifting.jpg',
-        category: 'SAFETY',
-        isCompleted: false,
-        progress: 0,
-        lessons: 4,
-      },
-      {
-        id: 'tc_2',
-        title: 'Customer Service Excellence',
-        description: 'How to communicate professionally with customers during loading/unloading.',
-        durationMinutes: 10,
-        thumbnail: 'https://cdn.parther.app/training/customer.jpg',
-        category: 'SOFT_SKILLS',
-        isCompleted: false,
-        progress: 0,
-        lessons: 3,
-      },
-      {
-        id: 'tc_3',
-        title: 'Using the Parther Worker App',
-        description: 'A complete walkthrough of how to use every feature of the app.',
-        durationMinutes: 8,
-        thumbnail: 'https://cdn.parther.app/training/app.jpg',
-        category: 'ONBOARDING',
-        isCompleted: true,
-        progress: 100,
-        lessons: 2,
-      },
-      {
-        id: 'tc_4',
-        title: 'Handling Fragile & Hazardous Items',
-        description: 'Rules and best practices when dealing with glass, electronics, or chemicals.',
-        durationMinutes: 20,
-        thumbnail: 'https://cdn.parther.app/training/fragile.jpg',
-        category: 'SAFETY',
-        isCompleted: false,
-        progress: 40,
-        lessons: 5,
-      },
-    ],
-  };
-}
 
 export async function getAnnouncements() {
   return prisma.announcement.findMany({

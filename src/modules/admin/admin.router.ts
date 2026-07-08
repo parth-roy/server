@@ -129,3 +129,11 @@ adminRouter.get('/gamification/badges', gamificationCtrl.listBadges);
 adminRouter.post('/gamification/badges', gamificationCtrl.createBadge);
 adminRouter.patch('/gamification/badges/:id', gamificationCtrl.updateBadge);
 adminRouter.get('/gamification/stats', gamificationCtrl.getGamificationStats);
+
+//  Training & Learning  
+import { trainingAdminController } from '@modules/training/training.admin.controller';
+adminRouter.get('/training/courses', (req, res) => trainingAdminController.getCourses(req, res));
+adminRouter.post('/training/courses', (req, res) => trainingAdminController.createCourse(req, res));
+adminRouter.patch('/training/courses/:id', (req, res) => trainingAdminController.updateCourse(req, res));
+adminRouter.delete('/training/courses/:id', (req, res) => trainingAdminController.deleteCourse(req, res));
+adminRouter.get('/training/stats', (req, res) => trainingAdminController.getStats(req, res));

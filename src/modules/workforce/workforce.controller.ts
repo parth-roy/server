@@ -230,12 +230,7 @@ export async function getBadges(req: Request, res: Response, next: NextFunction)
 // TRAINING
 // ─────────────────────────────────────────────
 
-export async function getTrainingCourses(req: Request, res: Response, next: NextFunction) {
-  try {
-    const result = await service.getTrainingCourses();
-    sendSuccess(res, result);
-  } catch (err) { next(err); }
-}
+// Training handled in dedicated controller
 
 export async function getAnnouncements(req: Request, res: Response, next: NextFunction) {
   try {

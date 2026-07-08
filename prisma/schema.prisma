@@ -423,6 +423,7 @@ model Worker {
   jobAssignments JobAssignment[]
   workerWallet   WorkerWallet?
   workerBadges   WorkerBadge[]
+  trainingProgress WorkerTrainingProgress[]
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -1481,4 +1482,52 @@ enum BadgeMetric {
   ACCEPTANCE_RATE
   ON_TIME_RATE
   TOTAL_EARNINGS
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum CourseStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model TrainingCourse {
+  id              String   @id @default(uuid())
+  title           String
+  description     String
+  modulesCount    Int
+  durationMinutes Int
+  level           CourseLevel
+  icon            String
+  iconColor       String
+  iconBgColor     String
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workerProgress WorkerTrainingProgress[]
+
+  @@map("training_courses")
+}
+
+model WorkerTrainingProgress {
+  id               String       @id @default(uuid())
+  workerId         String
+  worker           Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  courseId         String
+  course           TrainingCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  status           CourseStatus @default(IN_PROGRESS)
+  completedModules Int          @default(0)
+  lastAccessed     DateTime     @default(now())
+  certificateUrl   String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@unique([workerId, courseId])
+  @@map("worker_training_progress")
 }

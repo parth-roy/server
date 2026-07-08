@@ -19,6 +19,7 @@ import {
   EarningsChartQuerySchema,
   SosSchema,
 } from './workforce.schema';
+import { trainingWorkforceController } from '@modules/training/training.workforce.controller';
 
 export const workforceRouter = Router();
 
@@ -90,7 +91,8 @@ workforceRouter.get('/badges', ctrl.getBadges);
 // ─────────────────────────────────────────────
 // TRAINING
 // ─────────────────────────────────────────────
-workforceRouter.get('/training/courses', ctrl.getTrainingCourses);
+workforceRouter.get('/training/courses', (req, res) => trainingWorkforceController.getCourses(req, res));
+workforceRouter.post('/training/courses/:id/progress', (req, res) => trainingWorkforceController.updateProgress(req, res));
 
 // ─────────────────────────────────────────────
 // ANNOUNCEMENTS
