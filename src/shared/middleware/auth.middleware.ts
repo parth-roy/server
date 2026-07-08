@@ -19,7 +19,7 @@ export function authenticate(req: Request, _res: Response, next: NextFunction) {
   const token = authHeader.split(' ')[1];
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as JwtPayload;
-    req.user = { id: payload.userId, phone: payload.phone, role: payload.role };
+    req.user = { id: payload.userId || (payload as any).id, phone: payload.phone, role: payload.role };
     next();
   } catch (err) {
     if ((err as any).name === 'TokenExpiredError') {
@@ -46,7 +46,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   const token = authHeader.split(' ')[1];
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as JwtPayload;
-    req.user = { id: payload.userId, phone: payload.phone, role: payload.role };
+    req.user = { id: payload.userId || (payload as any).id, phone: payload.phone, role: payload.role };
   } catch {
     // Invalid token — continue without user (optional auth)
   }
