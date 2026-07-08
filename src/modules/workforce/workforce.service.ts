@@ -156,11 +156,17 @@ export async function verifyOtp(input: VerifyOtpInput) {
 
   // Issue JWT pair
   const accessToken = jwt.sign(
-    { userId: user.id, phone: user.phone, role: user.role },
+    { userId: user.id, phone: user.phone, role: UserRole.WORKER }, // Contextual Login
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }
   );
-  const refreshTokenValue = crypto.randomUUID();
+  const jti = crypto.randomUUID();
+  const refreshTokenValue = jwt.sign(
+    { userId: user.id, role: UserRole.WORKER, jti },
+    env.JWT_ACCESS_SECRET,
+    { expiresIn: '30d' }
+  );
+
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
   await prisma.refreshToken.create({
     data: { token: refreshTokenValue, userId: user.id, expiresAt },

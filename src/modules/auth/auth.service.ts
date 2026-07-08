@@ -324,7 +324,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
   }
 
   // Issue token pair
-  const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, user.role);
+  const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, role);
 
   return {
     accessToken,
@@ -335,7 +335,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       name: user.name,
       email: user.email,
       profileImageUrl: user.profileImageUrl,
-      role: user.role,
+      role: role, // Contextual Login override
       usageType: user.usageType,
       whatsappOptIn: user.whatsappOptIn,
       profileComplete: user.profileComplete,
@@ -348,6 +348,17 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
 // REFRESH TOKENS
 // ─────────────────────────────────────────────
 export async function refreshTokens({ refreshToken }: RefreshInput) {
+  // Extract contextual role if the refreshToken is a JWT
+  let contextualRole: string | undefined;
+  try {
+    const decoded = jwt.decode(refreshToken) as any;
+    if (decoded && decoded.role) {
+      contextualRole = decoded.role;
+    }
+  } catch (e) {
+    // Legacy UUID token, ignore
+  }
+
   // Look up the refresh token in DB
   const stored = await prisma.refreshToken.findUnique({
     where: { token: refreshToken },
@@ -370,7 +381,10 @@ export async function refreshTokens({ refreshToken }: RefreshInput) {
 
   // Rotate: delete old, issue new pair
   await prisma.refreshToken.delete({ where: { id: stored.id } });
-  const tokens = await issueTokenPair(stored.user.id, stored.user.phone, stored.user.role);
+  
+  // Use contextualRole if available, fallback to user's root DB role for legacy tokens
+  const roleToIssue = contextualRole || stored.user.role;
+  const tokens = await issueTokenPair(stored.user.id, stored.user.phone, roleToIssue);
 
   return tokens;
 }
@@ -394,9 +408,15 @@ async function issueTokenPair(userId: string, phone: string, role: string) {
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }  // '15m'
   );
 
-  // Refresh token: random UUID stored in DB
+  // Refresh token: encode the role into it, and store the JWT in DB
   const { v4: uuidv4 } = await import('uuid');
-  const rawRefreshToken = uuidv4();
+  const jti = uuidv4();
+  
+  const rawRefreshToken = jwt.sign(
+    { userId, role, jti },
+    env.JWT_ACCESS_SECRET,
+    { expiresIn: '30d' }
+  );
 
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 30); // 30 days from now
