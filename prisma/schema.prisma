@@ -392,8 +392,13 @@ model Worker {
   lastLocationAt DateTime?
 
   // Skills & capacity
-  maxWeightKg    Float       @default(100.0) // Max lifting capacity declared by worker
-  preferredTypes LaborType[] // What types of jobs this worker wants
+  maxWeightKg       Float       @default(100.0) // Max lifting capacity declared by worker
+  preferredTypes    LaborType[] // What types of jobs this worker wants
+  preferredWork     String?     // e.g. "All Types"
+  vehicleAccess     Boolean     @default(false)
+  availableTime     String?     // e.g. "6:00 AM - 10:00 PM"
+  preferredDistance Int         @default(25)
+  languages         String[]    @default(["Hindi", "English"]) // e.g. ["Hindi", "English"]
 
   // Payout / bank details
   bankAccountNo          String?

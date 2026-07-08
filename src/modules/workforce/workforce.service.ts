@@ -269,6 +269,11 @@ export async function updatePreferences(userId: string, input: UpdatePreferences
     data: {
       ...(workerFields.maxWeightKg !== undefined && { maxWeightKg: workerFields.maxWeightKg }),
       ...(workerFields.preferredTypes && { preferredTypes: workerFields.preferredTypes as LaborType[] }),
+      ...(workerFields.preferredWork !== undefined && { preferredWork: workerFields.preferredWork }),
+      ...(workerFields.vehicleAccess !== undefined && { vehicleAccess: workerFields.vehicleAccess }),
+      ...(workerFields.availableTime !== undefined && { availableTime: workerFields.availableTime }),
+      ...(workerFields.preferredDistance !== undefined && { preferredDistance: workerFields.preferredDistance }),
+      ...(workerFields.languages !== undefined && { languages: workerFields.languages }),
       ...(workerFields.bankAccountNo && { bankAccountNo: workerFields.bankAccountNo }),
       ...(workerFields.bankIfsc && { bankIfsc: workerFields.bankIfsc }),
       ...(workerFields.bankName && { bankName: workerFields.bankName }),

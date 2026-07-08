@@ -31,8 +31,13 @@ export const UpdateLocationSchema = z.object({
 
 export const UpdatePreferencesSchema = z.object({
   name: z.string().min(2).max(80).optional(),
-  maxWeightKg: z.number().min(1).max(500).optional(),
+  maxWeightKg: z.number().min(1).max(50000).optional(),
   preferredTypes: z.array(z.enum(['LOADING', 'UNLOADING', 'BOTH'])).optional(),
+  preferredWork: z.string().optional(),
+  vehicleAccess: z.boolean().optional(),
+  availableTime: z.string().optional(),
+  preferredDistance: z.number().min(1).max(1000).optional(),
+  languages: z.array(z.string()).optional(),
   bankAccountNo: z.string().min(9).max(18).optional(),
   bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code').optional(),
   bankName: z.string().min(2).max(80).optional(),
