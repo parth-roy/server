@@ -423,6 +423,7 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       status: {
         in: ['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'] as any[],
       },
+      jobAssignments: { none: { workerId: worker.id } }, // Exclude jobs already responded to
     },
     select: {
       id: true,
@@ -450,8 +451,7 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     .filter(b => {
       const acceptedCount = b.jobAssignments.length;
       const totalSlots = b.laborersCount ?? 1;
-      const alreadyAssigned = b.jobAssignments.some(a => a.workerId === worker.id);
-      return acceptedCount < totalSlots && !alreadyAssigned;
+      return acceptedCount < totalSlots;
     })
     .map(b => {
       const distanceKm =
@@ -933,12 +933,28 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       laborCharge: true,
       laborType: true,
       laborersCount: true,
+      jobAssignments: {
+        where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
+        select: { id: true },
+      },
     }
   });
 
   const availablePins = jobs
+    .filter(job => {
+      const acceptedCount = job.jobAssignments.length;
+      const totalSlots = job.laborersCount ?? 1;
+      return acceptedCount < totalSlots;
+    })
     .map(job => ({
-      ...job,
+      id: job.id,
+      bookingNumber: job.bookingNumber,
+      pickupLat: job.pickupLat,
+      pickupLng: job.pickupLng,
+      pickupAddress: job.pickupAddress,
+      laborCharge: job.laborCharge,
+      laborType: job.laborType,
+      laborersCount: job.laborersCount,
       distanceKm: haversineKm(lat, lng, job.pickupLat, job.pickupLng)
     }))
     .filter(job => job.distanceKm <= radiusKm);
@@ -1303,3 +1319,4 @@ export async function deleteAccount(userId: string) {
 
   return { deleted: true };
 }
+
