@@ -572,7 +572,6 @@ export async function acceptJob(userId: string, bookingId: string) {
       workerId: worker.id,
       status: WorkerJobStatus.ACCEPTED,
       payoutAmount: booking.laborCharge ?? 0,
-      assignedAt: new Date(),
     },
   });
 
