@@ -1065,9 +1065,8 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
         id: true,
         status: true,
         payoutAmount: true,
-        acceptedAt: true,
+        createdAt: true,
         completedAt: true,
-        laborType: true,
         booking: {
           select: {
             id: true,
@@ -1075,6 +1074,7 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
             pickupAddress: true,
             dropAddress: true,
             scheduledAt: true,
+            laborType: true,
           },
         },
       },
