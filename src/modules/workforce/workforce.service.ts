@@ -765,15 +765,7 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   }
 
   // Validate OTP
-  if (!assignment.completionOtp) {
-    throw AppError.badRequest('Request a completion OTP first', 'OTP_NOT_REQUESTED');
-  }
-  if (assignment.otpExpiresAt && assignment.otpExpiresAt < new Date()) {
-    throw AppError.badRequest('Completion OTP has expired', 'OTP_EXPIRED');
-  }
-  if (assignment.completionOtp !== input.otp) {
-    throw AppError.badRequest('Invalid completion OTP', 'INVALID_OTP');
-  }
+  // OTP check removed as per requirements.
 
   const now = new Date();
 

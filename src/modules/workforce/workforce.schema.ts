@@ -74,7 +74,7 @@ export const DeclineJobSchema = z.object({
 });
 
 export const CompleteJobSchema = z.object({
-  otp: z.string().length(4, 'Completion OTP must be 4 digits'),
+  otp: z.string().length(4, 'Completion OTP must be 4 digits').optional(),
 });
 
 export const JobRadarQuerySchema = z.object({
