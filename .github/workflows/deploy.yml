@@ -39,7 +39,6 @@ jobs:
 
       - name: Build Code on GitHub Runner
         run: |
-          cd server
           npm install
           npm run build
 
@@ -49,7 +48,7 @@ jobs:
           host: ${{ secrets.AWS_HOST }}
           username: ${{ secrets.AWS_USERNAME }}
           key: ${{ secrets.AWS_PRIVATE_KEY }}
-          source: "server/dist/,server/package.json,server/package-lock.json,server/prisma/"
+          source: "dist/,package.json,package-lock.json,prisma/"
           target: "/home/ubuntu/"
 
       - name: Restart PM2 on AWS
