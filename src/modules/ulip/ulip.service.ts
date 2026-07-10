@@ -500,7 +500,9 @@ export async function exchangeDigilockerToken(input: DigilockerTokenInput): Prom
   } catch (error: any) {
     const httpStatus = error.response?.status ?? 'TIMEOUT/NETWORK';
     const body = error.response?.data ? JSON.stringify(error.response.data) : error.message;
-    logger.error(`[ULIP-DIGI] Step 03 failed (HTTP ${httpStatus}): ${body}`);
+    const headers = error.response?.headers ? JSON.stringify(error.response.headers) : 'none';
+    logger.error(`[ULIP-DIGI] Step 03 failed (HTTP ${httpStatus}): ${body} | headers: ${headers}`);
+    logger.error(`[ULIP-DIGI] Step 03 request was: code=${input.code?.slice(0,10)}... verifier=${input.codeVerifier?.slice(0,10)}...`);
     throw error;
   }
 }
