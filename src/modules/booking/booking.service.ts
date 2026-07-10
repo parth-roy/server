@@ -578,14 +578,34 @@ export async function markDriverArriving(bookingId: string, userId: string) {
     const { booking } = await getDriverBooking(bookingId, userId);
     assertTransition(booking.status, BookingStatus.DRIVER_ARRIVING);
 
-    return prisma.booking.update({
+    const updated = await prisma.booking.update({
         where: { id: bookingId },
         data: {
             status: BookingStatus.DRIVER_ARRIVING,
-            arrivalTime: new Date(), // Records when driver arrived for waiting charge calculation
+            arrivalTime: new Date(),
         },
         select: bookingDetailSelect,
     });
+
+    // Notify customer — driver is arriving
+    const customer = await prisma.user.findUnique({ where: { id: updated.customerId }, select: { fcmToken: true } });
+    if (customer?.fcmToken) {
+        await notificationService.sendToDevice(customer.fcmToken, {
+            title: '🏃 Driver is Almost There!',
+            body: `Your driver is ${Math.ceil(Math.random() * 5 + 2)} mins away. Keep your goods ready to load! 📦`,
+            data: { type: 'DRIVER_ARRIVING', bookingId },
+        });
+    }
+    await createNotification(
+        updated.customerId,
+        '🏃 Driver is Almost There!',
+        'Your driver is on the way. Keep your goods ready to load!',
+        NotificationType.BOOKING_STATUS,
+        bookingId,
+    );
+
+    eventBus.emit('booking.driver_arriving', { bookingId, customerId: updated.customerId });
+    return updated;
 }
 
 // ─────────────────────────────────────────────
@@ -623,7 +643,7 @@ export async function markPickedUp(bookingId: string, userId: string) {
         }
     }
 
-    return prisma.booking.update({
+    const updated = await prisma.booking.update({
         where: { id: bookingId },
         data: {
             status: BookingStatus.PICKED_UP,
@@ -632,6 +652,9 @@ export async function markPickedUp(bookingId: string, userId: string) {
         },
         select: bookingDetailSelect,
     });
+
+    eventBus.emit('booking.goods_loaded', { bookingId, customerId: updated.customerId });
+    return updated;
 }
 
 // ─────────────────────────────────────────────
@@ -882,9 +905,9 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
         const customer = await prisma.user.findUnique({ where: { id: booking.customerId } });
         if (customer?.fcmToken) {
             await notificationService.sendToDevice(customer.fcmToken, {
-                title: '🚛 Driver Accepted!',
-                body: `Your driver is on the way. Your pickup OTP is ${pickupOtp} — share it with the driver when they arrive.`,
-                data: { type: 'DRIVER_ACCEPTED', bookingId, pickupOtp },
+                title: '🚛 Your Driver is On The Way!',
+                body: `Locked & loaded! Your driver accepted the booking. OTP: ${pickupOtp} — share when they arrive. 🔑`,
+                data: { type: 'DRIVER_ARRIVING', bookingId, pickupOtp },
             });
         }
         await createNotification(
@@ -972,15 +995,15 @@ export async function verifyPickupOtp(bookingId: string, userId: string, otp: st
     });
     if (customer?.fcmToken) {
         await notificationService.sendToDevice(customer.fcmToken, {
-            title: '📦 Pickup Confirmed!',
-            body: 'Your goods have been picked up. The driver is heading to the destination.',
-            data: { type: 'PICKUP_CONFIRMED', bookingId },
+            title: '📦 Goods Loaded — Rolling!',
+            body: 'Your goods are loaded and the truck is heading to the destination. Sit back! 🛣️',
+            data: { type: 'GOODS_LOADED', bookingId },
         });
     }
     await createNotification(
         booking.customerId,
-        '📦 Pickup Confirmed!',
-        'Your goods have been picked up. The driver is heading to the destination.',
+        '📦 Goods Loaded — Rolling!',
+        'Your goods are loaded. The driver is heading to the destination.',
         NotificationType.BOOKING_STATUS,
         bookingId,
     );

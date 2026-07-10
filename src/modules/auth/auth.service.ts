@@ -6,6 +6,7 @@ import { getMessaging } from '@config/firebase';
 import { env } from '@config/env';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
+import { eventBus } from '@shared/eventbus';
 import type { SendOtpInput, VerifyOtpInput, RefreshInput } from './auth.schema';
 
 const redis = getRedis();
@@ -326,6 +327,13 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
   // Issue token pair
   const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, role);
 
+  const isNewUser = !user.name;
+
+  // Fire welcome notification for brand new users
+  if (isNewUser) {
+    eventBus.emit('user.registered', { userId: user.id, fcmToken: tokenToSave ?? undefined });
+  }
+
   return {
     accessToken,
     refreshToken,
@@ -335,11 +343,11 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       name: user.name,
       email: user.email,
       profileImageUrl: user.profileImageUrl,
-      role: role, // Contextual Login override
+      role: role,
       usageType: user.usageType,
       whatsappOptIn: user.whatsappOptIn,
       profileComplete: user.profileComplete,
-      isNewUser: !user.name, // true if they haven't set their name yet
+      isNewUser,
     },
   };
 }

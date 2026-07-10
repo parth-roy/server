@@ -15,6 +15,7 @@ import { setupWorkforceGateway } from '@modules/workforce/workforce.gateway';
 import { registerEventListeners } from '@shared/eventbus/listeners';
 import { startAllWorkers } from './workers';
 import { startCleanupJobs } from '@shared/jobs/cleanup.job';
+import { startEngagementJobs } from '@shared/jobs/engagement.job';
 import { setSocketInstance } from '@shared/socket/socket.instance';
 
 
@@ -65,6 +66,9 @@ async function bootstrap() {
 
   // 5.6. Start maintenance cleanup jobs (location history TTL, expired tokens)
   startCleanupJobs();
+
+  // 5.7. Start scheduled engagement push notifications
+  startEngagementJobs();
 
   // 6. Start BullMQ workers
   try {

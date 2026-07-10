@@ -2,6 +2,7 @@ import { prisma } from '@shared/db/prisma';
 import { PrismaClient, CoinTransactionType, ScratchCardStatus, RewardType } from '@prisma/client';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
+import { eventBus } from '@shared/eventbus';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const RUPEE_TO_COIN_RATE = 1; // Used to calculate max possible scratch reward based on fare
@@ -122,6 +123,9 @@ export async function generateScratchCard(userId: string, bookingId: string, far
                 unlockedAt: new Date(),
             }
         });
+
+        // Notify user their scratch card is ready
+        eventBus.emit('rewards.scratch_card_ready', { userId });
 
         logger.info(`Generated scratch card for user ${userId} for booking ${bookingId}`);
     } catch (err) {

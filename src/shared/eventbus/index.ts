@@ -1,15 +1,25 @@
 import { EventEmitter2 } from 'eventemitter2';
 
 export interface AppEvents {
+  // Auth
+  'user.registered': { userId: string; fcmToken?: string };
+  // Booking lifecycle
   'booking.confirmed': { bookingId: string; customerId: string; vehicleType: string };
   'booking.driver_assigned': { bookingId: string; driverId: string; customerId: string };
+  'booking.driver_arriving': { bookingId: string; customerId: string };
+  'booking.goods_loaded': { bookingId: string; customerId: string };
   'booking.picked_up': { bookingId: string };
   'booking.delivered': { bookingId: string; customerId: string; totalFare: number };
   'booking.cancelled': { bookingId: string; customerId: string; reason: string };
+  'booking.bid_accepted': { bookingId: string; driverId: string };
+  // Payments
   'payment.completed': { bookingId: string; customerId: string; amount: number; method: string };
   'payment.wallet_topped_up': { userId: string; amount: number };
+  // Rewards
   'rewards.coins_earned': { userId: string; coins: number; bookingId: string };
-  'booking.bid_accepted': { bookingId: string; driverId: string };
+  'rewards.scratch_card_ready': { userId: string };
+  // Announcements
+  'announcement.created': { title: string; body: string };
 }
 
 class TypedEventBus extends EventEmitter2 {

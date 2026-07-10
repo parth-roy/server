@@ -1,5 +1,5 @@
 import { prisma } from '@shared/db/prisma';
-
+import { eventBus } from '@shared/eventbus';
 
 export async function getActiveAnnouncements() {
     const now = new Date();
@@ -21,4 +21,20 @@ export async function getActiveAnnouncements() {
         },
         orderBy: { createdAt: 'desc' }
     });
+}
+
+export async function createAnnouncement(data: {
+    title: string;
+    body: string;
+    imageUrl?: string;
+    startsAt?: Date;
+    endsAt?: Date;
+    target?: string;
+}) {
+    const announcement = await prisma.announcement.create({ data: { ...data, isActive: true } });
+
+    // Broadcast push to all users via FCM topic
+    eventBus.emit('announcement.created', { title: data.title, body: data.body });
+
+    return announcement;
 }
