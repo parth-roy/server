@@ -43,9 +43,16 @@
  */
 
 import axios from 'axios';
+import https from 'https';
+import { env } from '@config/env';
 import { logger } from '@shared/logger';
 import { getUlipToken, getUlipBaseUrl } from '@modules/fleet/ulipAuth.service';
-import { env } from '@config/env';
+
+// ULIP government servers (staging + production) have SSL cert issues
+// Bypass SSL verification only for ULIP API calls — all other app SSL is unaffected
+const ulipHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+const getUlipHttpsAgent = () => ulipHttpsAgent;
+
 
 // ─── SARATHI (Driving License) ──────────────────────────────────────────────
 
@@ -336,6 +343,7 @@ export async function initDigilockerSession(input: DigilockerInitInput): Promise
           'Content-Type': 'application/json',
         },
         timeout: 90000,
+        httpsAgent: getUlipHttpsAgent(),
       }
     );
 

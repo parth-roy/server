@@ -12,9 +12,14 @@
  */
 
 import axios from 'axios';
+import https from 'https';
 import { env } from '@config/env';
 import { getRedis } from '@config/redis';
 import { logger } from '@shared/logger';
+
+// ULIP government servers (staging + production) have SSL cert issues
+// Bypass SSL verification only for ULIP API calls — all other app SSL is unaffected
+const ulipHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const REDIS_KEY = 'ulip:jwt_token';
 const REDIS_TTL_SECONDS = 28 * 60; // 28 min (safe buffer before 30-min expiry)
@@ -75,6 +80,7 @@ async function _refreshUlipToken(): Promise<string> {
     {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       timeout: 15_000, // 15s — ULIP can be slow
+      httpsAgent: ulipHttpsAgent, // ULIP govt servers have SSL cert issues
     }
   );
 
