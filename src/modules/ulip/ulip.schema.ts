@@ -39,7 +39,7 @@ export const digilockerInitSchema = z.object({
   dob: z.string()
     .length(8, 'Date of birth must be 8 digits in DDMMYYYY format')
     .regex(/^\d{8}$/, 'DOB must be in DDMMYYYY format (e.g. 01011990)'),
-  gender: z.enum(['M', 'F', 'T'], { errorMap: () => ({ message: 'Gender must be M, F, or T' }) }),
+  gender: z.enum(['M', 'F', 'T'], { error: 'Gender must be M, F, or T' }),
   mobile: z.string()
     .length(10, 'Mobile number must be 10 digits')
     .regex(/^\d{10}$/, 'Mobile number must contain only digits'),
