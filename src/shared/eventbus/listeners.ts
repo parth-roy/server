@@ -1,6 +1,6 @@
 import { eventBus } from './index';
 import { dispatchBooking, dispatchWorkers } from '@modules/dispatch/dispatch.service';
-import { earnCoins } from '@modules/rewards/rewards.service';
+import { generateScratchCard } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { notificationService } from '@modules/notifications/notification.service';
 import { prisma } from '@shared/db/prisma';
@@ -39,7 +39,7 @@ export function registerEventListeners(): void {
     // booking.delivered → earn coins for customer + push notification
     eventBus.on('booking.delivered', async ({ bookingId, customerId, totalFare }) => {
         try {
-            await earnCoins(customerId, bookingId, totalFare);
+            await generateScratchCard(customerId, bookingId, totalFare);
 
             const user = await prisma.user.findUnique({
                 where: { id: customerId },

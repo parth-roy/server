@@ -40,7 +40,7 @@ export async function scratchCard(req: Request, res: Response, next: NextFunctio
             throw AppError.badRequest('cardId is required');
         }
 
-        const result = await RewardsService.scratchCard(req.user!.id, cardId);
+        const result = await RewardsService.scratchCard(req.user!.id, cardId as string);
         sendSuccess(res, result, 'Card scratched successfully');
     } catch (err) {
         next(err);
