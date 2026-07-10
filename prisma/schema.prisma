@@ -163,6 +163,16 @@ enum UlipVerifStatus {
   MANUAL_REVIEW // DL/RC not in SARATHI/VAHAN (pre-digital) — admin reviews physical doc
 }
 
+// Digilocker KYC status for Aadhaar and PAN (worker app)
+enum DigiKycStatus {
+  PENDING       // Not yet started
+  OTP_SENT      // Step 01 complete, OTP triggered (new user signup flow)
+  TOKEN_READY   // Step 03 complete, access_token obtained, ready to fetch docs
+  VERIFIED      // Documents fetched and stored successfully
+  FAILED        // API call failed — may retry
+  MANUAL_REVIEW // Fallback: manual upload submitted, pending admin review
+}
+
 enum SupportTicketStatus {
   OPEN
   IN_PROGRESS
@@ -414,9 +424,23 @@ model Worker {
   razorpayxFundAccountId String?
   bankVerified           Boolean @default(false)
 
-  // KYC documents (S3 URLs)
-  aadhaarUrl String?
-  panUrl     String?
+  // KYC documents - Digilocker verified fields
+  aadhaarNumber       String?              // Masked Aadhaar UID (last 4 digits only stored)
+  aadhaarVerifStatus  DigiKycStatus        @default(PENDING)
+  aadhaarVerifiedAt   DateTime?
+  aadhaarUrl          String?              // S3 URL of Aadhaar PDF fetched from Digilocker
+
+  panNumber           String?              // PAN card number  
+  panVerifStatus      DigiKycStatus        @default(PENDING)
+  panVerifiedAt       DateTime?
+  panUrl              String?              // S3 URL of PAN PDF fetched from Digilocker
+
+  // Digilocker session (ephemeral, cleared after verification)
+  digiCodeVerifier    String?              // PKCE code_verifier (stored during OTP step)
+  digiCodeChallenge   String?              // PKCE code_challenge
+  digiCode            String?              // Authorization code from step 01/02
+  digiAccessToken     String?              // Bearer token from step 03 (expires in 3600s)
+  digiTokenExpiresAt  DateTime?            // When the access_token expires
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
