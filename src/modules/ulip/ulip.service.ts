@@ -348,6 +348,7 @@ export async function initDigilockerSession(input: DigilockerInitInput): Promise
     );
 
     const raw = response.data?.response?.[0]?.response;
+    logger.info(`[ULIP-DIGI] Step 01 raw response: ${JSON.stringify(response.data)}`);
     if (!raw?.code) throw new Error('[ULIP-DIGI] Step 01 returned no authorization code');
 
     logger.info(`[ULIP-DIGI] Step 01 success — requiresOtp: ${raw.mobile !== null}`);
