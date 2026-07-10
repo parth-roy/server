@@ -64,4 +64,4 @@ jobs:
             cd /home/ubuntu/server
             npm install --omit=dev
             npx prisma generate
-            pm2 restart logistic-server --update-env || pm2 start dist/index.js --name "logistic-server"
+            pm2 restart logistic-server --update-env || pm2 start dist/server.js --name "logistic-server"
