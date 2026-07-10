@@ -41,9 +41,16 @@ export function createApp(): Application {
   const apiRouter = express.Router();
 
   // FIX S6: Redirect HTTP → HTTPS in production
+  // Uses req.protocol (not raw header) so multi-hop proxy chains work correctly:
+  // Cloudflare → DigitalOcean → AWS all set X-Forwarded-Proto=https,
+  // but AWS Nginx rewrites $scheme=http. req.protocol respects trust proxy setting.
   if (env.NODE_ENV === 'production') {
     app.use((req, res, next) => {
-      if (req.headers['x-forwarded-proto'] !== 'https') {
+      const proto = req.headers['x-forwarded-proto'];
+      const isHttps = Array.isArray(proto)
+        ? proto[0] === 'https'
+        : proto === 'https';
+      if (!isHttps) {
         return res.redirect(301, `https://${req.headers.host}${req.url}`);
       }
       next();
