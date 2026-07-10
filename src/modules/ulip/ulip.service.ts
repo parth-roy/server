@@ -469,12 +469,15 @@ export async function exchangeDigilockerToken(input: DigilockerTokenInput): Prom
 
   logger.info(`[ULIP-DIGI] Step 03 — Exchanging code for access_token`);
   try {
+    const requestBody = {
+      code: input.code,
+      code_verifier: input.codeVerifier,
+    };
+    logger.info(`[ULIP-DIGI] Step 03 URL: ${baseUrl}/DIGILOCKER/03`);
+    logger.info(`[ULIP-DIGI] Step 03 body: ${JSON.stringify(requestBody)}`);
     const response = await axios.post(
       `${baseUrl}/DIGILOCKER/03`,
-      {
-        code: input.code,
-        code_verifier: input.codeVerifier,
-      },
+      requestBody,
       {
         headers: {
           'Authorization': `Bearer ${ulipToken}`,
@@ -482,6 +485,7 @@ export async function exchangeDigilockerToken(input: DigilockerTokenInput): Prom
           'Content-Type': 'application/json',
         },
         timeout: 60000,
+        httpsAgent: getUlipHttpsAgent(),
       }
     );
 
