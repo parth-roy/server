@@ -67,21 +67,11 @@ export interface UlipEchallanJobData {
   vehicleNumber: string;
 }
 
-export interface UlipDigilockerJobData {
-  type: 'DIGILOCKER';
-  driverId: string;
-  userId: string;
-  documentType: string;
-  documentNumber: string;
-  dob?: string;
-}
-
 export type UlipJobData =
   | UlipSarathiJobData
   | UlipVahanJobData
   | UlipFastagJobData
-  | UlipEchallanJobData
-  | UlipDigilockerJobData;
+  | UlipEchallanJobData;
 
 // ── SARATHI processor ──────────────────────────────────────────────────────────
 
@@ -310,40 +300,6 @@ async function processEchallan(data: UlipEchallanJobData): Promise<void> {
   logger.info(`[ULIP Worker] ECHALLAN for vehicle ${vehicleNumber} → ${status}`);
 }
 
-// ── DIGILOCKER processor ───────────────────────────────────────────────────────
-
-async function processDigilocker(data: UlipDigilockerJobData): Promise<void> {
-  const { driverId, userId, documentType, documentNumber, dob } = data;
-  let status: UlipVerifStatus;
-  let digilockerResponse: any;
-
-  try {
-    digilockerResponse = await UlipService.verifyDigilocker(documentNumber, documentType, dob);
-    const resp = digilockerResponse?.response?.[0]?.response;
-    const apiStatus = (digilockerResponse?.status || resp?.status || '').toUpperCase();
-    status = (apiStatus === 'SUCCESS' || apiStatus === 'VERIFIED')
-      ? UlipVerifStatus.VERIFIED
-      : UlipVerifStatus.MANUAL_REVIEW;
-  } catch (err: any) {
-    status = UlipVerifStatus.FAILED;
-    digilockerResponse = { error: true, message: err.message };
-  }
-
-  await prisma.verificationLog.create({
-    data: {
-      entityType: 'driver',
-      entityId: driverId,
-      apiCalled: 'DIGILOCKER/01',
-      requestBody: { documentType, documentNumber },
-      response: digilockerResponse,
-      status,
-      calledBy: userId,
-    },
-  });
-
-  emitToDriverRoom(driverId, 'ulip_verification_result', { type: 'DIGILOCKER', status, verified: status === UlipVerifStatus.VERIFIED });
-  logger.info(`[ULIP Worker] DIGILOCKER for driver ${driverId} → ${status}`);
-}
 
 // ── Worker bootstrap ───────────────────────────────────────────────────────────
 
@@ -357,7 +313,7 @@ export function startUlipWorker(): void {
       case 'VAHAN':      await processVahan(data);      break;
       case 'FASTAG':     await processFastag(data);     break;
       case 'ECHALLAN':   await processEchallan(data);   break;
-      case 'DIGILOCKER': await processDigilocker(data); break;
+
       default:
         logger.error(`[ULIP Worker] Unknown job type: ${(data as any).type}`);
     }
