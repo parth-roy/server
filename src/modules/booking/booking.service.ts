@@ -1,5 +1,5 @@
 import { prisma } from '@shared/db/prisma';
-import { earnCoins } from '@modules/rewards/rewards.service';
+import { generateScratchCard } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { NotificationType } from '@prisma/client';
 import { PrismaClient, BookingStatus, UserRole, PaymentMethod } from '@prisma/client';
@@ -785,6 +785,9 @@ export async function completeBooking(bookingId: string, userId: string) {
     });
 
     logger.info(`Booking completed: ${updated.bookingNumber}`);
+
+    // Generate a scratch card reward for the customer
+    await generateScratchCard(updated.customerId, updated.id, updated.grandTotal ?? updated.totalFare ?? 0);
 
     // ── PHASE 9: Commission Settlement ───────────────────────────────────────
     // Settle earnings and commissions asynchronously after status update.

@@ -1,15 +1,10 @@
 import { prisma } from '@shared/db/prisma';
-import { PrismaClient, CoinTransactionType, WalletTransactionType, WalletTransactionReason } from '@prisma/client';
+import { PrismaClient, CoinTransactionType, ScratchCardStatus, RewardType } from '@prisma/client';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 
-
 // ─── Config ───────────────────────────────────────────────────────────────────
-// 1 Coin = ₹0.9 in wallet credit (configurable)
-const COIN_TO_RUPEE_RATE = 0.9;
-// Coins earned per ₹ spent
-const RUPEE_TO_COIN_RATE = 1; // 1 coin per ₹1 spent
-// Tier thresholds
+const RUPEE_TO_COIN_RATE = 1; // Used to calculate max possible scratch reward based on fare
 const TIERS = [
     { name: 'Bronze', minCoins: 0 },
     { name: 'Silver', minCoins: 500 },
@@ -53,13 +48,12 @@ export async function getCoinBalance(userId: string) {
         coins: coinBalance.cachedBalance,
         tier: tier.name,
         nextTier: TIERS[TIERS.indexOf(tier) + 1] ?? null,
-        coinToRupeeRate: COIN_TO_RUPEE_RATE,
         recentTransactions: coinBalance.transactions,
     };
 }
 
 // ─────────────────────────────────────────────
-// GET COIN TRANSACTION HISTORY (paginated)
+// GET COIN TRANSACTION HISTORY
 // ─────────────────────────────────────────────
 
 export async function getCoinHistory(userId: string, page: number, limit: number) {
@@ -92,112 +86,94 @@ export async function getCoinHistory(userId: string, page: number, limit: number
 }
 
 // ─────────────────────────────────────────────
-// EARN COINS (called internally after booking completion)
+// SCRATCH CARDS LOGIC
 // ─────────────────────────────────────────────
 
-export async function earnCoins(userId: string, bookingId: string, fareAmount: number) {
-    try {
-        const coinsToEarn = Math.floor(fareAmount * RUPEE_TO_COIN_RATE);
-        if (coinsToEarn <= 0) return;
+export async function getScratchCards(userId: string) {
+    return prisma.scratchCard.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+    });
+}
 
+export async function generateScratchCard(userId: string, bookingId: string, fareAmount: number) {
+    try {
+        // Only generate if there's no scratch card for this booking yet
+        const existing = await prisma.scratchCard.findUnique({ where: { bookingId } });
+        if (existing) return;
+
+        // Calculate max coins they could win based on fare. Add randomness for fun factor.
+        const maxCoins = Math.max(Math.floor(fareAmount * RUPEE_TO_COIN_RATE), 10);
+        const winCoins = Math.floor(Math.random() * (maxCoins / 2)) + Math.floor(maxCoins / 2); // Win 50% to 100% of maxCoins
+        
+        // 90% chance to win coins, 10% chance to get 'better luck next time'
+        const isWin = Math.random() > 0.1;
+
+        await prisma.scratchCard.create({
+            data: {
+                userId,
+                bookingId,
+                status: ScratchCardStatus.READY,
+                isWin,
+                rewardType: RewardType.COINS,
+                rewardValue: isWin ? winCoins : 0,
+                title: 'Booking Reward',
+                description: 'Scratch to reveal your reward!',
+                unlockedAt: new Date(),
+            }
+        });
+
+        logger.info(`Generated scratch card for user ${userId} for booking ${bookingId}`);
+    } catch (err) {
+        logger.error('Failed to generate scratch card:', err);
+    }
+}
+
+export async function scratchCard(userId: string, cardId: string) {
+    const card = await prisma.scratchCard.findFirst({
+        where: { id: cardId, userId },
+    });
+
+    if (!card) throw AppError.notFound('Scratch card not found');
+    if (card.status !== ScratchCardStatus.READY) throw AppError.badRequest('Card is not ready to be scratched');
+
+    const now = new Date();
+    // Mark scratched
+    const updatedCard = await prisma.scratchCard.update({
+        where: { id: cardId },
+        data: {
+            status: ScratchCardStatus.SCRATCHED,
+            scratchedAt: now,
+            expiresAt: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000), // 90 days expiry
+        }
+    });
+
+    // If won, credit coins to CoinBalance (NOT Wallet)
+    if (card.isWin && card.rewardType === RewardType.COINS && card.rewardValue) {
         let coinBalance = await prisma.coinBalance.findUnique({ where: { userId } });
         if (!coinBalance) {
             coinBalance = await prisma.coinBalance.create({ data: { userId, cachedBalance: 0 } });
         }
 
-        const newBalance = coinBalance.cachedBalance + coinsToEarn;
+        const newBalance = coinBalance.cachedBalance + card.rewardValue;
 
         await prisma.$transaction([
             prisma.coinBalance.update({
-                where: { userId },
+                where: { id: coinBalance.id },
                 data: { cachedBalance: newBalance },
             }),
             prisma.coinTransaction.create({
                 data: {
                     coinBalanceId: coinBalance.id,
                     type: CoinTransactionType.EARN,
-                    coins: coinsToEarn,
+                    coins: card.rewardValue,
                     balanceAfter: newBalance,
-                    referenceId: bookingId,
-                    note: `Earned from delivery`,
+                    referenceId: cardId,
+                    note: `Won from scratch card`,
                 }
             }),
         ]);
-
-        logger.info(`Coins earned: ${coinsToEarn} for user ${userId} from booking ${bookingId}`);
-    } catch (err) {
-        // Non-critical — don't let coin errors break the booking flow
-        logger.error('Failed to award coins:', err);
-    }
-}
-
-// ─────────────────────────────────────────────
-// REDEEM COINS → WALLET CREDIT
-// ─────────────────────────────────────────────
-
-export async function redeemCoins(userId: string, coins: number) {
-    if (!coins || coins <= 0) {
-        throw AppError.badRequest('coins must be a positive number');
-    }
-    if (!Number.isInteger(coins)) {
-        throw AppError.badRequest('coins must be a whole number');
     }
 
-    const coinBalance = await prisma.coinBalance.findUnique({ where: { userId } });
-    if (!coinBalance) throw AppError.notFound('Coin balance not found');
-
-    if (coinBalance.cachedBalance < coins) {
-        throw AppError.badRequest(
-            `Insufficient coins. You have ${coinBalance.cachedBalance} coins, but tried to redeem ${coins}.`,
-            'INSUFFICIENT_COINS'
-        );
-    }
-
-    const rupeeCredit = coins * COIN_TO_RUPEE_RATE;
-    const newCoinBalance = coinBalance.cachedBalance - coins;
-
-    // Get or create wallet
-    let wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) {
-        wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
-    }
-    const newWalletBalance = wallet.cachedBalance + rupeeCredit;
-
-    // Atomic: deduct coins + credit wallet
-    await prisma.$transaction([
-        prisma.coinBalance.update({
-            where: { userId },
-            data: { cachedBalance: newCoinBalance },
-        }),
-        prisma.coinTransaction.create({
-            data: {
-                coinBalanceId: coinBalance.id,
-                type: CoinTransactionType.REDEEM,
-                coins,
-                balanceAfter: newCoinBalance,
-                note: `Redeemed for ₹${rupeeCredit.toFixed(2)} wallet credit`,
-            }
-        }),
-        prisma.wallet.update({
-            where: { userId },
-            data: { cachedBalance: newWalletBalance },
-        }),
-        prisma.walletTransaction.create({
-            data: {
-                walletId: wallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.CASHBACK,
-                amount: rupeeCredit,
-                balanceAfter: newWalletBalance,
-                note: `Redeemed ${coins} coins`,
-            }
-        }),
-    ]);
-
-    return {
-        coinsRedeemed: coins,
-        rupeesCredited: rupeeCredit,
-        newCoinBalance,
-        newWalletBalance,
-    };
+    return updatedCard;
 }

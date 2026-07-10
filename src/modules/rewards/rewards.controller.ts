@@ -24,16 +24,24 @@ export async function getCoinHistory(req: Request, res: Response, next: NextFunc
     }
 }
 
-export async function redeemCoins(req: Request, res: Response, next: NextFunction) {
+export async function getScratchCards(req: Request, res: Response, next: NextFunction) {
     try {
-        const { coins } = req.body;
+        const result = await RewardsService.getScratchCards(req.user!.id);
+        sendSuccess(res, result);
+    } catch (err) {
+        next(err);
+    }
+}
 
-        if (!coins || typeof coins !== 'number') {
-            throw AppError.badRequest('coins must be a positive number');
+export async function scratchCard(req: Request, res: Response, next: NextFunction) {
+    try {
+        const { cardId } = req.params;
+        if (!cardId) {
+            throw AppError.badRequest('cardId is required');
         }
 
-        const result = await RewardsService.redeemCoins(req.user!.id, coins);
-        sendSuccess(res, result, `${result.coinsRedeemed} coins redeemed for ₹${result.rupeesCredited.toFixed(2)}`);
+        const result = await RewardsService.scratchCard(req.user!.id, cardId);
+        sendSuccess(res, result, 'Card scratched successfully');
     } catch (err) {
         next(err);
     }

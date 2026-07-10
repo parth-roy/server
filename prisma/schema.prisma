@@ -106,25 +106,25 @@ enum CoinTransactionType {
 // ─────────────────────────────────────────────
 
 enum DriverWalletReason {
-  TRIP_EARNING         // Online trip: net earning credited after commission
-  COMMISSION_DEDUCTED  // Cash trip: commission debited (balance may go negative)
-  COMMISSION_PAID      // Driver paid outstanding commission (online or cash at office)
-  CASHBACK             // Platform cashback/reward
-  WITHDRAWAL           // Payout transferred to driver's bank account
-  ADMIN_CREDIT         // Manual admin adjustment (goodwill / error correction)
-  ADMIN_DEBIT          // Manual admin debit (reversal / clawback)
-  FLEET_SALARY         // Payment received from fleet owner via internal transfer
-  SUBSCRIPTION         // Monthly subscription deducted
+  TRIP_EARNING // Online trip: net earning credited after commission
+  COMMISSION_DEDUCTED // Cash trip: commission debited (balance may go negative)
+  COMMISSION_PAID // Driver paid outstanding commission (online or cash at office)
+  CASHBACK // Platform cashback/reward
+  WITHDRAWAL // Payout transferred to driver's bank account
+  ADMIN_CREDIT // Manual admin adjustment (goodwill / error correction)
+  ADMIN_DEBIT // Manual admin debit (reversal / clawback)
+  FLEET_SALARY // Payment received from fleet owner via internal transfer
+  SUBSCRIPTION // Monthly subscription deducted
 }
 
 enum WorkerWalletReason {
-  JOB_EARNING          // Job completed, earnings credited
-  COMMISSION_DEDUCTED  // Cash job: platform commission debited
-  COMMISSION_PAID      // Worker cleared outstanding commission
-  CASHBACK             // Platform reward
-  WITHDRAWAL           // Payout to bank
-  ADMIN_CREDIT         // Manual admin credit
-  ADMIN_DEBIT          // Manual admin debit
+  JOB_EARNING // Job completed, earnings credited
+  COMMISSION_DEDUCTED // Cash job: platform commission debited
+  COMMISSION_PAID // Worker cleared outstanding commission
+  CASHBACK // Platform reward
+  WITHDRAWAL // Payout to bank
+  ADMIN_CREDIT // Manual admin credit
+  ADMIN_DEBIT // Manual admin debit
 }
 
 enum WithdrawalEntityType {
@@ -134,12 +134,12 @@ enum WithdrawalEntityType {
 }
 
 enum WithdrawalStatus {
-  PENDING           // Request created, funds reserved in wallet
-  AUTO_PROCESSING   // Sent to RazorpayX, awaiting webhook confirmation
-  COMPLETED         // RazorpayX confirmed, UTR received, money in bank
-  FAILED            // RazorpayX failed, funds returned to wallet
-  ADMIN_PENDING     // Escalated to admin for manual processing
-  ADMIN_COMPLETED   // Admin manually processed and confirmed
+  PENDING // Request created, funds reserved in wallet
+  AUTO_PROCESSING // Sent to RazorpayX, awaiting webhook confirmation
+  COMPLETED // RazorpayX confirmed, UTR received, money in bank
+  FAILED // RazorpayX failed, funds returned to wallet
+  ADMIN_PENDING // Escalated to admin for manual processing
+  ADMIN_COMPLETED // Admin manually processed and confirmed
 }
 
 enum DriverStatus {
@@ -165,11 +165,11 @@ enum UlipVerifStatus {
 
 // Digilocker KYC status for Aadhaar and PAN (worker app)
 enum DigiKycStatus {
-  PENDING       // Not yet started
-  OTP_SENT      // Step 01 complete, OTP triggered (new user signup flow)
-  TOKEN_READY   // Step 03 complete, access_token obtained, ready to fetch docs
-  VERIFIED      // Documents fetched and stored successfully
-  FAILED        // API call failed — may retry
+  PENDING // Not yet started
+  OTP_SENT // Step 01 complete, OTP triggered (new user signup flow)
+  TOKEN_READY // Step 03 complete, access_token obtained, ready to fetch docs
+  VERIFIED // Documents fetched and stored successfully
+  FAILED // API call failed — may retry
   MANUAL_REVIEW // Fallback: manual upload submitted, pending admin review
 }
 
@@ -211,18 +211,18 @@ enum LaborType {
 // ─────────────────────────────────────────────
 
 model User {
-  id              String   @id @default(uuid())
-  phone           String   @unique
-  name            String?
-  email           String?  @unique
-  profileImageUrl String?
+  id                   String   @id @default(uuid())
+  phone                String   @unique
+  name                 String?
+  email                String?  @unique
+  profileImageUrl      String?
   role                 UserRole @default(CUSTOMER)
   isActive             Boolean  @default(true)
   language             String   @default("en")
   notificationsEnabled Boolean  @default(true)
   fcmToken             String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   // ── Admin-only auth fields ──────────────────────────────────────────
   // Only populated for users with role = ADMIN.
@@ -249,7 +249,8 @@ model User {
   profileComplete Boolean @default(false)
 
   // Enterprise specific relations
-  teamMembers TeamMember[] @relation("EnterpriseTeamMembers")
+  teamMembers TeamMember[]  @relation("EnterpriseTeamMembers")
+  ScratchCard ScratchCard[]
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -405,16 +406,16 @@ model Worker {
   // Skills & capacity
   maxWeightKg       Float       @default(100.0) // Max lifting capacity declared by worker
   preferredTypes    LaborType[] // What types of jobs this worker wants
-  preferredWork     String?     // e.g. "All Types"
+  preferredWork     String? // e.g. "All Types"
   vehicleAccess     Boolean     @default(false)
-  availableTime     String?     // e.g. "6:00 AM - 10:00 PM"
+  availableTime     String? // e.g. "6:00 AM - 10:00 PM"
   preferredDistance Int         @default(25)
   languages         String[]    @default(["Hindi", "English"]) // e.g. ["Hindi", "English"]
 
   // Gamification
-  gamificationPoints Int     @default(0)
+  gamificationPoints Int       @default(0)
   gamificationTier   BadgeTier @default(BRONZE)
-  
+
   // Payout / bank details
   bankAccountNo          String?
   bankIfsc               String?
@@ -425,29 +426,29 @@ model Worker {
   bankVerified           Boolean @default(false)
 
   // KYC documents - Digilocker verified fields
-  aadhaarNumber       String?              // Masked Aadhaar UID (last 4 digits only stored)
-  aadhaarVerifStatus  DigiKycStatus        @default(PENDING)
-  aadhaarVerifiedAt   DateTime?
-  aadhaarUrl          String?              // S3 URL of Aadhaar PDF fetched from Digilocker
+  aadhaarNumber      String? // Masked Aadhaar UID (last 4 digits only stored)
+  aadhaarVerifStatus DigiKycStatus @default(PENDING)
+  aadhaarVerifiedAt  DateTime?
+  aadhaarUrl         String? // S3 URL of Aadhaar PDF fetched from Digilocker
 
-  panNumber           String?              // PAN card number  
-  panVerifStatus      DigiKycStatus        @default(PENDING)
-  panVerifiedAt       DateTime?
-  panUrl              String?              // S3 URL of PAN PDF fetched from Digilocker
+  panNumber      String? // PAN card number  
+  panVerifStatus DigiKycStatus @default(PENDING)
+  panVerifiedAt  DateTime?
+  panUrl         String? // S3 URL of PAN PDF fetched from Digilocker
 
   // Digilocker session (ephemeral, cleared after verification)
-  digiCodeVerifier    String?              // PKCE code_verifier (stored during OTP step)
-  digiCodeChallenge   String?              // PKCE code_challenge
-  digiCode            String?              // Authorization code from step 01/02
-  digiAccessToken     String?              // Bearer token from step 03 (expires in 3600s)
-  digiTokenExpiresAt  DateTime?            // When the access_token expires
+  digiCodeVerifier   String? // PKCE code_verifier (stored during OTP step)
+  digiCodeChallenge  String? // PKCE code_challenge
+  digiCode           String? // Authorization code from step 01/02
+  digiAccessToken    String? // Bearer token from step 03 (expires in 3600s)
+  digiTokenExpiresAt DateTime? // When the access_token expires
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  jobAssignments JobAssignment[]
-  workerWallet   WorkerWallet?
-  workerBadges   WorkerBadge[]
+  jobAssignments   JobAssignment[]
+  workerWallet     WorkerWallet?
+  workerBadges     WorkerBadge[]
   trainingProgress WorkerTrainingProgress[]
 
   @@index([status])
@@ -460,7 +461,7 @@ model Badge {
   code         String      @unique // e.g., "FIRST_STEP", "CENTURY_CLUB"
   name         String
   description  String
-  icon         String      // e.g., "Icons.check_circle" or url
+  icon         String // e.g., "Icons.check_circle" or url
   tier         BadgeTier
   metric       BadgeMetric
   targetValue  Float
@@ -472,15 +473,15 @@ model Badge {
 }
 
 model WorkerBadge {
-  id        String    @id @default(uuid())
-  workerId  String
-  badgeId   String
-  progress  Float     @default(0)
-  isEarned  Boolean   @default(false)
-  earnedAt  DateTime?
+  id       String    @id @default(uuid())
+  workerId String
+  badgeId  String
+  progress Float     @default(0)
+  isEarned Boolean   @default(false)
+  earnedAt DateTime?
 
-  worker    Worker    @relation(fields: [workerId], references: [userId], onDelete: Cascade)
-  badge     Badge     @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  worker Worker @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  badge  Badge  @relation(fields: [badgeId], references: [id], onDelete: Cascade)
 
   @@unique([workerId, badgeId])
 }
@@ -685,7 +686,7 @@ model Booking {
   razorpayOrderId String? // Stored on createOrder; verified in verifyPayment to prevent replay attacks
   declineCount    Int            @default(0) // Incremented on each driver decline; triggers re-dispatch
 
-  pickupOtp       String? // 4-digit OTP shown to customer, must be entered by driver before pickup starts
+  pickupOtp String? // 4-digit OTP shown to customer, must be entered by driver before pickup starts
 
   customerRating Float?
   driverRating   Float?
@@ -714,10 +715,11 @@ model Booking {
 
   // ── Workforce Labor Fields ──────────────────────────────────────────────
   // All nullable/defaulted so zero impact on existing bookings
-  laborRequired Boolean    @default(false) // Does this booking need loading/unloading workers?
+  laborRequired Boolean      @default(false) // Does this booking need loading/unloading workers?
   laborersCount Int? // How many workers are needed (e.g., 3)
   laborType     LaborType? // LOADING | UNLOADING | BOTH
   laborCharge   Float? // Platform-calculated payout per worker × count
+  ScratchCard   ScratchCard?
 
   @@index([status])
   @@index([customerId, status])
@@ -751,13 +753,13 @@ model BookingLocationHistory {
   id         String   @id @default(uuid())
   bookingId  String
   booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  driverId   String?  // Denormalised for fast admin queries — no join needed
+  driverId   String? // Denormalised for fast admin queries — no join needed
   latitude   Float
   longitude  Float
-  speedKmh   Float?   // Speed in km/h at recording time (from GPS)
-  headingDeg Float?   // Bearing in degrees 0–360
-  accuracyM  Float?   // GPS accuracy in metres
-  tripPhase  String?  // DRIVER_ARRIVING | PICKED_UP | IN_TRANSIT — which leg of the trip
+  speedKmh   Float? // Speed in km/h at recording time (from GPS)
+  headingDeg Float? // Bearing in degrees 0–360
+  accuracyM  Float? // GPS accuracy in metres
+  tripPhase  String? // DRIVER_ARRIVING | PICKED_UP | IN_TRANSIT — which leg of the trip
   recordedAt DateTime @default(now())
 
   @@index([bookingId, recordedAt])
@@ -817,6 +819,39 @@ model WalletTransaction {
 // ─────────────────────────────────────────────
 // REWARDS / COINS
 // ─────────────────────────────────────────────
+
+model ScratchCard {
+  id          String            @id @default(uuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookingId   String?           @unique
+  booking     Booking?          @relation(fields: [bookingId], references: [id])
+  status      ScratchCardStatus @default(LOCKED)
+  isWin       Boolean           @default(false)
+  rewardType  RewardType?
+  rewardValue Float?
+  title       String?
+  description String?
+  unlockedAt  DateTime?
+  scratchedAt DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime          @default(now())
+
+  @@index([userId, status])
+  @@map("scratch_cards")
+}
+
+enum ScratchCardStatus {
+  LOCKED
+  READY
+  SCRATCHED
+  EXPIRED
+}
+
+enum RewardType {
+  COINS
+  DISCOUNT
+}
 
 model CoinBalance {
   id            String   @id @default(uuid())
@@ -1050,7 +1085,7 @@ model Announcement {
   endsAt    DateTime?
   createdAt DateTime  @default(now())
 
-  target    String    @default("CUSTOMER")
+  target String @default("CUSTOMER")
 
   @@map("announcements")
 }
@@ -1086,14 +1121,14 @@ model UserNotification {
 // ─────────────────────────────────────────────
 
 model FleetOwner {
-  id          String   @id @default(uuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String  @id @default(uuid())
+  userId      String  @unique
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   companyName String?
   gstin       String?
   pan         String?
-  isVerified  Boolean  @default(false)
-  isActive    Boolean  @default(true)
+  isVerified  Boolean @default(false)
+  isActive    Boolean @default(true)
 
   // ── Bank / Payout details (for RazorpayX withdrawals) ──
   bankAccountNo          String?
@@ -1104,8 +1139,8 @@ model FleetOwner {
   razorpayxFundAccountId String?
   bankVerified           Boolean @default(false)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   trucks       FleetTruck[]
   fleetDrivers FleetDriver[]
@@ -1234,8 +1269,8 @@ model DriverWallet {
   id            String   @id @default(uuid())
   driverId      String   @unique
   driver        Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  cachedBalance Float    @default(0)   // Running balance; can be negative
-  commissionDue Float    @default(0)   // Total unpaid cash-trip commission
+  cachedBalance Float    @default(0) // Running balance; can be negative
+  commissionDue Float    @default(0) // Total unpaid cash-trip commission
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1245,17 +1280,17 @@ model DriverWallet {
 }
 
 model DriverWalletTransaction {
-  id           String             @id @default(uuid())
+  id           String                @id @default(uuid())
   walletId     String
-  wallet       DriverWallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  type         WalletTransactionType  // CREDIT | DEBIT
+  wallet       DriverWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         WalletTransactionType // CREDIT | DEBIT
   reason       DriverWalletReason
   amount       Float
   balanceAfter Float
-  bookingId    String?            // Trip that triggered this transaction
-  referenceId  String?            // Razorpay payment_id, payout_id, or admin note ref
+  bookingId    String? // Trip that triggered this transaction
+  referenceId  String? // Razorpay payment_id, payout_id, or admin note ref
   note         String?
-  createdAt    DateTime           @default(now())
+  createdAt    DateTime              @default(now())
 
   @@index([walletId, createdAt])
   @@index([bookingId])
@@ -1282,9 +1317,9 @@ model WorkerWallet {
 }
 
 model WorkerWalletTransaction {
-  id           String             @id @default(uuid())
+  id           String                @id @default(uuid())
   walletId     String
-  wallet       WorkerWallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       WorkerWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
   type         WalletTransactionType
   reason       WorkerWalletReason
   amount       Float
@@ -1292,7 +1327,7 @@ model WorkerWalletTransaction {
   bookingId    String?
   referenceId  String?
   note         String?
-  createdAt    DateTime           @default(now())
+  createdAt    DateTime              @default(now())
 
   @@index([walletId, createdAt])
   @@index([bookingId])
@@ -1306,11 +1341,11 @@ model WorkerWalletTransaction {
 // On failure, funds are returned to wallet automatically.
 
 model WithdrawalRequest {
-  id           String               @id @default(uuid())
-  entityType   WithdrawalEntityType // DRIVER | FLEET | WORKER
-  entityId     String               // driverId | fleetOwnerId | workerId
-  amount       Float                // Amount in INR
-  status       WithdrawalStatus     @default(PENDING)
+  id         String               @id @default(uuid())
+  entityType WithdrawalEntityType // DRIVER | FLEET | WORKER
+  entityId   String // driverId | fleetOwnerId | workerId
+  amount     Float // Amount in INR
+  status     WithdrawalStatus     @default(PENDING)
 
   // Bank details snapshot at request time (immutable after creation)
   bankAccountNo         String
@@ -1348,7 +1383,7 @@ model WithdrawalRequest {
 model ProcessedWebhook {
   id          String   @id @default(uuid())
   eventId     String   @unique // x-razorpay-event-id header
-  eventType   String           // e.g. payment.captured, payout.processed
+  eventType   String // e.g. payment.captured, payout.processed
   processedAt DateTime @default(now())
 
   @@index([eventId])
@@ -1364,11 +1399,11 @@ model ProcessedWebhook {
 model CashCollectionRecord {
   id          String               @id @default(uuid())
   entityType  WithdrawalEntityType // DRIVER | WORKER | FLEET
-  entityId    String               // driverId, workerId, or fleetOwnerId
-  bookingId   String?              // Specific booking this cash covers (optional)
-  amount      Float                // Amount received in cash (INR)
-  collectedBy String               // userId of admin/fleet owner who recorded this
-  note        String?              // e.g. "Driver came to office on 6 Jul 2026"
+  entityId    String // driverId, workerId, or fleetOwnerId
+  bookingId   String? // Specific booking this cash covers (optional)
+  amount      Float // Amount received in cash (INR)
+  collectedBy String // userId of admin/fleet owner who recorded this
+  note        String? // e.g. "Driver came to office on 6 Jul 2026"
   createdAt   DateTime             @default(now())
 
   @@index([entityType, entityId])
@@ -1492,7 +1527,6 @@ model FleetTruckDocument {
   @@map("fleet_truck_documents")
 }
 
-
 enum BadgeTier {
   BRONZE
   SILVER
@@ -1522,7 +1556,7 @@ enum CourseStatus {
 }
 
 model TrainingCourse {
-  id              String   @id @default(uuid())
+  id              String      @id @default(uuid())
   title           String
   description     String
   modulesCount    Int
@@ -1531,9 +1565,9 @@ model TrainingCourse {
   icon            String
   iconColor       String
   iconBgColor     String
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   workerProgress WorkerTrainingProgress[]
 
@@ -1541,17 +1575,17 @@ model TrainingCourse {
 }
 
 model WorkerTrainingProgress {
-  id               String       @id @default(uuid())
+  id               String         @id @default(uuid())
   workerId         String
-  worker           Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  worker           Worker         @relation(fields: [workerId], references: [id], onDelete: Cascade)
   courseId         String
   course           TrainingCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  status           CourseStatus @default(IN_PROGRESS)
-  completedModules Int          @default(0)
-  lastAccessed     DateTime     @default(now())
+  status           CourseStatus   @default(IN_PROGRESS)
+  completedModules Int            @default(0)
+  lastAccessed     DateTime       @default(now())
   certificateUrl   String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@unique([workerId, courseId])
   @@map("worker_training_progress")
