@@ -315,12 +315,7 @@ export const pricingService = {
 
     // ── [3] Helper count validation ───────────────────────────────────────
     const helpers = helperCount ?? (hasLoadingService ? 1 : 0);
-    if (helpers > (vehicle.maxHelpers ?? 0)) {
-      throw AppError.badRequest(
-        `This vehicle supports max ${vehicle.maxHelpers ?? 0} helper(s)`,
-        'HELPER_COUNT_INVALID'
-      );
-    }
+    // Removed maxHelpers check: Customer can now request any number of helpers.
 
     // ── [4] Distance & duration ───────────────────────────────────────────
     const { distanceKm, durationMinutes } = await mapsService.getDistanceMatrix(

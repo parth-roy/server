@@ -331,7 +331,6 @@ export async function createBooking(customerId: string, data: CreateBookingInput
     logger.info(`Booking created: ${booking.bookingNumber} by customer ${customerId} (fare: ₹${serverFare.totalFare})`);
     return booking;
 }
-
 // ─────────────────────────────────────────────
 // CUSTOMER — LIST MY BOOKINGS
 // ─────────────────────────────────────────────
@@ -341,7 +340,11 @@ export async function listBookings(userId: string, role: string, query: ListBook
     const skip = (page - 1) * limit;
 
     const where: any = {
-        ...(status && { status }),
+        ...(status && {
+            status: typeof status === 'string' && status.includes(',')
+                ? { in: status.split(',') }
+                : status
+        }),
     };
 
     if (role === UserRole.CUSTOMER) {
@@ -358,20 +361,7 @@ export async function listBookings(userId: string, role: string, query: ListBook
             orderBy: { createdAt: 'desc' },
             skip,
             take: limit,
-            select: {
-                id: true,
-                bookingNumber: true,
-                status: true,
-                vehicleType: true,
-                pickupAddress: true,
-                stops: {
-                    select: { address: true, sequence: true, isCompleted: true },
-                    orderBy: { sequence: 'asc' as const },
-                },
-                totalFare: true,
-                paymentStatus: true,
-                createdAt: true,
-            },
+            select: bookingDetailSelect,
         }),
         prisma.booking.count({ where }),
     ]);
