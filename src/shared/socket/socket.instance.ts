@@ -53,4 +53,20 @@ export function emitToWorkerRoom(workerId: string, event: string, data: object):
     socketInstance.of('/workforce').to(`worker_${workerId}`).emit(event, data);
 }
 
+/** Private marketplace events. Rooms are joined only after gateway authorization. */
+export function emitToMarketplaceCustomer(bookingId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/marketplace').to(`marketplace_customer_${bookingId}`).emit(event, data);
+}
+
+export function emitToMarketplaceBid(bidId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/marketplace').to(`marketplace_bid_${bidId}`).emit(event, data);
+}
+
+export function emitToMarketplaceUser(userId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/marketplace').to(`marketplace_user_${userId}`).emit(event, data);
+}
+
 

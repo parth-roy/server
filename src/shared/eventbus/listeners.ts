@@ -6,6 +6,7 @@ import { notificationService } from '@modules/notifications/notification.service
 import { prisma } from '@shared/db/prisma';
 import { NotificationType } from '@prisma/client';
 import { logger } from '@shared/logger';
+import { publishBidOpportunity } from '@modules/marketplace/marketplace.service';
 
 // ─── Punchy re-engagement messages (Zomato/Porter style) ───────────────────
 export const PROMO_MESSAGES = [
@@ -47,20 +48,30 @@ export function registerEventListeners(): void {
     // ─── 2. BOOKING CONFIRMED → dispatch + customer notification ─────────────
     eventBus.on('booking.confirmed', async ({ bookingId }) => {
         try {
-            logger.info(`[EventBus] booking.confirmed → dispatching ${bookingId}`);
-            await dispatchBooking(bookingId);
+            const mode = await prisma.booking.findUnique({ where: { id: bookingId }, select: { bookingMode: true } });
+            logger.info(`[EventBus] booking.confirmed → ${mode?.bookingMode === 'PRIVATE_BID' ? 'marketplace' : 'dispatch'} ${bookingId}`);
+            if (mode?.bookingMode === 'PRIVATE_BID') {
+                await publishBidOpportunity(bookingId);
+            } else {
+                await dispatchBooking(bookingId);
+            }
 
             const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { customerId: true, bookingNumber: true } });
             if (booking) {
                 const customer = await prisma.user.findUnique({ where: { id: booking.customerId }, select: { fcmToken: true } });
+                const isPrivateBid = mode?.bookingMode === 'PRIVATE_BID';
+                const title = isPrivateBid ? '🔒 Private bidding is live' : '🔍 Hunting Your Driver!';
+                const body = isPrivateBid
+                    ? `Booking #${booking.bookingNumber} is open to verified providers. Offers and counteroffers stay private.`
+                    : `Booking #${booking.bookingNumber} confirmed! We're finding the best driver near you. Sit tight! 🚛`;
                 if (customer?.fcmToken) {
                     await notificationService.sendToDevice(customer.fcmToken, {
-                        title: '🔍 Hunting Your Driver!',
-                        body: `Booking #${booking.bookingNumber} confirmed! We're finding the best driver near you. Sit tight! 🚛`,
-                        data: { type: 'BOOKING_CONFIRMED', bookingId },
+                        title,
+                        body,
+                        data: { type: isPrivateBid ? 'BIDDING_OPEN' : 'BOOKING_CONFIRMED', bookingId },
                     });
                 }
-                await createNotification(booking.customerId, '🔍 Driver Search Started!', `Booking #${booking.bookingNumber} confirmed. Finding your driver now.`, NotificationType.BOOKING_STATUS, bookingId);
+                await createNotification(booking.customerId, title, body, NotificationType.BOOKING_STATUS, bookingId);
             }
         } catch (err) {
             logger.error(`[EventBus] Dispatch failed for booking ${bookingId}:`, err);
@@ -70,6 +81,8 @@ export function registerEventListeners(): void {
     // booking.confirmed → labor dispatch (SECOND listener — runs in parallel)
     eventBus.on('booking.confirmed', async ({ bookingId }) => {
         try {
+            const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { bookingMode: true } });
+            if (booking?.bookingMode === 'PRIVATE_BID') return;
             await dispatchWorkers(bookingId);
         } catch (err) {
             logger.error(`[EventBus] Worker dispatch failed for booking ${bookingId}:`, err);

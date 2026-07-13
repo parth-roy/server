@@ -2,8 +2,18 @@ import { prisma } from '@shared/db/prisma';
 import { generateScratchCard } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { NotificationType } from '@prisma/client';
-import { PrismaClient, BookingStatus, UserRole, PaymentMethod } from '@prisma/client';
-import { randomInt } from 'crypto';
+import {
+    BidAwardStatus,
+    BidWindowStatus,
+    BookingMode,
+    BookingStatus,
+    DriverStatus,
+    MarketplaceBidStatus,
+    PaymentMethod,
+    Prisma,
+    UserRole,
+} from '@prisma/client';
+import { randomInt, randomUUID } from 'crypto';
 import { AppError } from '@shared/errors/AppError';
 import { eventBus } from '@shared/eventbus';
 import { logger } from '@shared/logger';
@@ -21,34 +31,10 @@ import type {
     RateBookingInput,
     ListBookingsQuery,
 } from './booking.schema';
-
-
-// ─────────────────────────────────────────────
-// STATE MACHINE
-// Every status change goes through assertTransition.
-// If it's not in this map, it cannot happen — period.
-// ─────────────────────────────────────────────
-
-const VALID_TRANSITIONS: Partial<Record<BookingStatus, BookingStatus[]>> = {
-    [BookingStatus.DRAFT]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED],
-    [BookingStatus.CONFIRMED]: [BookingStatus.DRIVER_ASSIGNED, BookingStatus.DRIVER_ARRIVING, BookingStatus.CANCELLED],
-    [BookingStatus.DRIVER_ASSIGNED]: [BookingStatus.DRIVER_ARRIVING, BookingStatus.CANCELLED],
-    [BookingStatus.DRIVER_ARRIVING]: [BookingStatus.PICKED_UP, BookingStatus.CANCELLED],
-    [BookingStatus.PICKED_UP]: [BookingStatus.IN_TRANSIT, BookingStatus.DELIVERED],
-    [BookingStatus.IN_TRANSIT]: [BookingStatus.DELIVERED],
-    [BookingStatus.DELIVERED]: [BookingStatus.COMPLETED],
-    // COMPLETED and CANCELLED have no outgoing transitions
-};
-
-export function assertTransition(current: BookingStatus, next: BookingStatus): void {
-    const allowed = VALID_TRANSITIONS[current] ?? [];
-    if (!allowed.includes(next)) {
-        throw AppError.badRequest(
-            `Cannot move booking from ${current} to ${next}`,
-            'INVALID_STATE_TRANSITION'
-        );
-    }
-}
+import { env } from '@config/env';
+import * as MarketplaceService from '@modules/marketplace/marketplace.service';
+import { assertTransition } from './booking.transition';
+export { assertTransition } from './booking.transition';
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -67,6 +53,11 @@ const bookingDetailSelect = {
     customerId: true,
     driverId: true,
     status: true,
+    bookingMode: true,
+    bidWindowMinutes: true,
+    marketplaceVersion: true,
+    awardedFleetOwnerId: true,
+    bidWindow: true,
     vehicleType: true,
     declineCount: true,
     hasLoadingService: true,
@@ -270,6 +261,8 @@ export async function createBooking(customerId: string, data: CreateBookingInput
                     surgeMultiplier: serverFare.fareBreakdown?.surgeMultiplier ?? 1.0,
                     loadingCharge: serverFare.fareBreakdown.loadingCharge,
                     gstAmount: serverFare.gstBreakdown?.totalGst ?? 0,
+                    taxAmount: serverFare.gstBreakdown?.totalGst ?? 0,
+                    grandTotal: serverFare.grandTotal,
                     estimatedDistance: serverFare.estimatedDistanceKm,
                     estimatedDuration: serverFare.estimatedDurationMinutes,
                     stops: {
@@ -375,11 +368,28 @@ export async function getBooking(bookingId: string, userId: string, role: string
         if (!driver) {
             throw AppError.forbidden('Driver profile not found');
         }
-        // Allow access if the booking is not assigned to anyone yet (so they can see details before accepting)
-        // OR if it's assigned specifically to this driver
-        if (booking.driverId !== null && booking.driverId !== driver.id) {
+        const canReadInstantOpportunity =
+            booking.bookingMode === BookingMode.INSTANT &&
+            booking.status === BookingStatus.CONFIRMED &&
+            booking.driverId === null;
+        if (booking.driverId !== driver.id && !canReadInstantOpportunity) {
             throw AppError.forbidden('You do not have access to this booking');
         }
+    } else if (role === UserRole.FLEET_OWNER) {
+        const fleetOwner = await prisma.fleetOwner.findUnique({
+            where: { userId },
+            select: { id: true },
+        });
+        if (!fleetOwner) throw AppError.forbidden('Fleet owner profile not found');
+        const canReadInstantOpportunity =
+            booking.bookingMode === BookingMode.INSTANT &&
+            booking.status === BookingStatus.CONFIRMED &&
+            booking.driverId === null;
+        if (booking.awardedFleetOwnerId !== fleetOwner.id && !canReadInstantOpportunity) {
+            throw AppError.forbidden('You do not have access to this booking');
+        }
+    } else if (role !== UserRole.CUSTOMER && role !== UserRole.ADMIN) {
+        throw AppError.forbidden('You do not have access to this booking');
     }
 
     return booking;
@@ -397,10 +407,25 @@ export async function confirmBooking(bookingId: string, customerId: string) {
     if (!booking) throw AppError.notFound('Booking not found');
     assertTransition(booking.status, BookingStatus.CONFIRMED);
 
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: { status: BookingStatus.CONFIRMED },
-        select: bookingDetailSelect,
+    const updated = await prisma.$transaction(async (tx) => {
+        const confirmed = await tx.booking.update({
+            where: { id: bookingId },
+            data: { status: BookingStatus.CONFIRMED },
+            select: bookingDetailSelect,
+        });
+
+        if (confirmed.bookingMode === 'PRIVATE_BID') {
+            const closesAt = new Date(Date.now() + confirmed.bidWindowMinutes * 60_000);
+            await tx.bidWindow.create({
+                data: {
+                    bookingId,
+                    closesAt,
+                    maxRevisionsPerBid: env.BID_MAX_REVISIONS,
+                },
+            });
+            return tx.booking.findUniqueOrThrow({ where: { id: bookingId }, select: bookingDetailSelect });
+        }
+        return confirmed;
     });
 
     // Phase 7 (Dispatch Engine) will listen for this event and assign a driver
@@ -428,23 +453,102 @@ export async function cancelBooking(
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
     if (!booking) throw AppError.notFound('Booking not found');
 
-    // Customers can only cancel their own bookings
+    let actorDriverId: string | null = null;
     if (role === UserRole.CUSTOMER && booking.customerId !== userId) {
         throw AppError.forbidden('You do not have access to this booking');
     }
+    if (role === UserRole.DRIVER) {
+        const driver = await prisma.driver.findUnique({ where: { userId }, select: { id: true } });
+        if (!driver || booking.driverId !== driver.id) {
+            throw AppError.forbidden('Only the assigned driver can cancel this booking');
+        }
+        actorDriverId = driver.id;
+    } else if (role !== UserRole.CUSTOMER && role !== UserRole.ADMIN) {
+        throw AppError.forbidden('You do not have access to cancel this booking');
+    }
 
-    assertTransition(booking.status, BookingStatus.CANCELLED);
+    const updated = await prisma.$transaction(async (tx) => {
+        const current = await tx.booking.findUnique({ where: { id: bookingId } });
+        if (!current) throw AppError.notFound('Booking not found');
+        if (role === UserRole.CUSTOMER && current.customerId !== userId) {
+            throw AppError.forbidden('You do not have access to this booking');
+        }
+        if (role === UserRole.DRIVER && current.driverId !== actorDriverId) {
+            throw AppError.forbidden('Only the assigned driver can cancel this booking');
+        }
+        assertTransition(current.status, BookingStatus.CANCELLED);
 
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-            status: BookingStatus.CANCELLED,
-            cancellationReason: data.reason,
-            cancelledBy: userId,
-            cancellationTime: new Date(),
-        },
-        select: bookingDetailSelect,
-    });
+        if (current.bookingMode === BookingMode.PRIVATE_BID) {
+            const unsettledAward = await tx.bidAward.findFirst({
+                where: {
+                    bookingId,
+                    activeKey: bookingId,
+                    status: {
+                        in: [
+                            BidAwardStatus.PAYMENT_PENDING,
+                            BidAwardStatus.PAYMENT_RECONCILING,
+                        ],
+                    },
+                },
+                select: { id: true },
+            });
+            if (unsettledAward) {
+                throw AppError.conflict(
+                    'This selected bid is being paid or reconciled. Wait for settlement before cancelling.',
+                    'BID_PAYMENT_IN_PROGRESS',
+                );
+            }
+        }
+
+        const cancelled = await tx.booking.updateMany({
+            where: {
+                id: bookingId,
+                status: current.status,
+                marketplaceVersion: current.marketplaceVersion,
+            },
+            data: {
+                status: BookingStatus.CANCELLED,
+                cancellationReason: data.reason,
+                cancelledBy: userId,
+                cancellationTime: new Date(),
+                marketplaceVersion: { increment: 1 },
+            },
+        });
+        if (cancelled.count !== 1) {
+            throw AppError.conflict('Booking changed before cancellation', 'BOOKING_STATE_CONFLICT');
+        }
+
+        if (current.bookingMode === BookingMode.PRIVATE_BID) {
+            await tx.bidWindow.updateMany({
+                where: { bookingId, status: BidWindowStatus.OPEN },
+                data: {
+                    status: BidWindowStatus.WITHDRAWN,
+                    closedAt: new Date(),
+                    version: { increment: 1 },
+                },
+            });
+            await tx.marketplaceBid.updateMany({
+                where: { bookingId, status: MarketplaceBidStatus.OPEN },
+                data: { status: MarketplaceBidStatus.EXPIRED, closedAt: new Date() },
+            });
+        }
+
+        if (
+            current.driverId &&
+            (current.status === BookingStatus.DRIVER_ASSIGNED ||
+                current.status === BookingStatus.DRIVER_ARRIVING)
+        ) {
+            await tx.driver.updateMany({
+                where: { id: current.driverId, status: DriverStatus.ON_TRIP },
+                data: { status: DriverStatus.AVAILABLE },
+            });
+        }
+
+        return tx.booking.findUniqueOrThrow({
+            where: { id: bookingId },
+            select: bookingDetailSelect,
+        });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     // Phase 11 (Notifications) will listen to alert the other party
     eventBus.emit('booking.cancelled', {
@@ -452,6 +556,12 @@ export async function cancelBooking(
         customerId: updated.customerId,
         reason: data.reason,
     });
+
+    if (updated.bookingMode === BookingMode.PRIVATE_BID) {
+        MarketplaceService.notifyMarketplaceBookingCancelled(updated.id).catch((err) => {
+            logger.error(`[Marketplace] Cancellation notification failed for ${updated.id}:`, err);
+        });
+    }
 
     // ── AUTO REFUND: if customer paid via wallet, refund instantly ────────────
     // Uses fire-and-forget to not block the cancellation response.
@@ -476,30 +586,9 @@ export async function cancelBooking(
 }
 
 export async function cancelBookingBySystem(bookingId: string, reason: string, cancelledBy: string = 'SYSTEM') {
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { id: true } });
     if (!booking) return;
-
-    assertTransition(booking.status, BookingStatus.CANCELLED);
-
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-            status: BookingStatus.CANCELLED,
-            cancellationReason: reason,
-            cancelledBy: cancelledBy,
-            cancellationTime: new Date(),
-        },
-        select: bookingDetailSelect,
-    });
-
-    eventBus.emit('booking.cancelled', {
-        bookingId: updated.id,
-        customerId: updated.customerId,
-        reason: reason,
-    });
-
-    logger.info(`Booking cancelled by SYSTEM: ${updated.bookingNumber}`);
-    return updated;
+    return cancelBooking(bookingId, cancelledBy, UserRole.ADMIN, { reason });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -801,10 +890,17 @@ export async function completeBooking(bookingId: string, userId: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
     assertTransition(booking.status, BookingStatus.COMPLETED);
 
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: { status: BookingStatus.COMPLETED },
-        select: bookingDetailSelect,
+    const updated = await prisma.$transaction(async (tx) => {
+        const completed = await tx.booking.update({
+            where: { id: bookingId },
+            data: { status: BookingStatus.COMPLETED },
+            select: bookingDetailSelect,
+        });
+        await tx.driver.updateMany({
+            where: { id: driver.id, status: DriverStatus.ON_TRIP },
+            data: { status: DriverStatus.AVAILABLE },
+        });
+        return completed;
     });
 
     logger.info(`Booking completed: ${updated.bookingNumber}`);
@@ -851,6 +947,40 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw AppError.notFound('Driver profile not found');
 
+    const marketplaceReservation = await prisma.bidAward.findFirst({
+        where: {
+            activeKey: { not: null },
+            status: {
+                in: [
+                    BidAwardStatus.PAYMENT_PENDING,
+                    BidAwardStatus.PAYMENT_RECONCILING,
+                    BidAwardStatus.CONFIRMED,
+                ],
+            },
+            bid: { driverId: driver.id },
+            booking: {
+                status: {
+                    in: [
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.DRIVER_ASSIGNED,
+                        BookingStatus.DRIVER_ARRIVING,
+                        BookingStatus.PICKED_UP,
+                        BookingStatus.IN_TRANSIT,
+                    ],
+                },
+            },
+        },
+        select: { bookingId: true },
+    });
+    if (marketplaceReservation) {
+        throw AppError.conflict(
+            marketplaceReservation.bookingId === bookingId
+                ? 'This marketplace load is already assigned. Open it and start the trip.'
+                : 'You already have a selected marketplace load',
+            'MARKETPLACE_LOAD_RESERVED',
+        );
+    }
+
     // Guard: reject if driver is already on another trip
     if (driver.status === 'ON_TRIP') {
         throw AppError.conflict(
@@ -871,13 +1001,20 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     // Flow B — Fleet assignment: fleet owner pre-assigned this driver.
     //   Booking is DRIVER_ASSIGNED with driverId=this driver. Driver confirms.
 
+    assertTransition(BookingStatus.CONFIRMED, BookingStatus.DRIVER_ARRIVING);
     let acceptResult = await prisma.booking.updateMany({
-        where: { id: bookingId, driverId: null, status: BookingStatus.CONFIRMED },
+        where: {
+            id: bookingId,
+            bookingMode: BookingMode.INSTANT,
+            driverId: null,
+            status: BookingStatus.CONFIRMED,
+        },
         data: { driverId: driver.id, status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
     });
 
     if (acceptResult.count === 0) {
         // Try fleet assignment flow
+        assertTransition(BookingStatus.DRIVER_ASSIGNED, BookingStatus.DRIVER_ARRIVING);
         acceptResult = await prisma.booking.updateMany({
             where: { id: bookingId, driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
             data: { status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
@@ -1053,6 +1190,17 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw AppError.notFound('Driver profile not found');
 
+    const bookingMode = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { bookingMode: true },
+    });
+    if (bookingMode?.bookingMode === BookingMode.PRIVATE_BID) {
+        throw AppError.conflict(
+            'A secured marketplace award cannot be declined through broadcast dispatch',
+            'MARKETPLACE_AWARD_CANCELLATION_REQUIRED',
+        );
+    }
+
     const booking = await prisma.booking.findFirst({
         where: { 
             id: bookingId,
@@ -1064,6 +1212,9 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
         },
     });
     if (!booking) throw AppError.notFound('Booking not found or already accepted/declined');
+    if (booking.status === BookingStatus.DRIVER_ASSIGNED) {
+        assertTransition(booking.status, BookingStatus.CONFIRMED);
+    }
 
     // Unassign driver, revert to CONFIRMED, increment declineCount
     await prisma.booking.update({
@@ -1112,97 +1263,37 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
 // ─────────────────────────────────────────────
 
 export async function createBid(bookingId: string, driverUserId: string, data: any) {
-    const driver = await prisma.driver.findUnique({ where: { userId: driverUserId } });
-    if (!driver) throw AppError.notFound('Driver profile not found');
-
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
     if (!booking) throw AppError.notFound('Booking not found');
-
-    // Make sure they don't bid multiple times on the same booking
-    const existing = await prisma.bid.findFirst({
-        where: { bookingId, driverId: driver.id },
-    });
-    if (existing) throw AppError.conflict('You have already placed a bid on this booking');
-
-    return prisma.bid.create({
-        data: {
-            bookingId,
-            driverId: driver.id,
+    const pickupCommitmentAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    return MarketplaceService.submitBid(
+        bookingId,
+        { userId: driverUserId, role: UserRole.DRIVER },
+        {
+            idempotencyKey: randomUUID(),
             amount: data.amount,
+            pickupCommitmentAt,
+            transitMinutes: booking.estimatedDuration ?? 60,
+            validForMinutes: Math.min(10, booking.bidWindowMinutes),
+            inclusions: [],
+            exclusions: [],
             note: data.note,
         },
-    });
+    );
 }
 
 export async function getBids(bookingId: string, userId: string, role: string) {
-    // Only customer of this booking, or admin, or driver who placed a bid
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-    if (!booking) throw AppError.notFound('Booking not found');
-
-    if (role === UserRole.CUSTOMER && booking.customerId !== userId) {
-        throw AppError.forbidden('Access denied');
-    }
-
-    return prisma.bid.findMany({
-        where: { bookingId },
-        orderBy: { amount: 'asc' },
-        include: {
-            driver: {
-                select: {
-                    rating: true,
-                    user: {
-                        select: { name: true, phone: true, profileImageUrl: true }
-                    },
-                    vehicle: {
-                        select: { type: true, registrationNo: true }
-                    }
-                }
-            }
-        }
-    });
+    const result = await MarketplaceService.listBookingBids(bookingId, { userId, role });
+    return result.bids;
 }
 
 export async function acceptBid(bookingId: string, customerId: string, bidId: string) {
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId, customerId } });
-    if (!booking) throw AppError.notFound('Booking not found or you are not the owner');
-
-    if (booking.status !== BookingStatus.CONFIRMED && booking.status !== BookingStatus.DRAFT) {
-        throw AppError.badRequest('Booking is no longer available for bidding');
-    }
-
-    const bid = await prisma.bid.findUnique({ where: { id: bidId, bookingId } });
-    if (!bid) throw AppError.notFound('Bid not found');
-
-    // 1. Mark this bid as ACCEPTED
-    await prisma.bid.update({
-        where: { id: bidId },
-        data: { status: 'ACCEPTED' },
-    });
-
-    // 2. Mark other bids as REJECTED
-    await prisma.bid.updateMany({
-        where: { bookingId, id: { not: bidId } },
-        data: { status: 'REJECTED' },
-    });
-
-    // 3. Assign driver to booking and update fare to the bid amount
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-            driverId: bid.driverId,
-            totalFare: bid.amount, // Set totalFare directly to the negotiated amount
-            status: BookingStatus.DRIVER_ASSIGNED,
-        },
-        select: bookingDetailSelect,
-    });
-
-    logger.info(`Bid accepted for booking ${booking.bookingNumber} at ${bid.amount}`);
-    
-    // Notify Driver
-    eventBus.emit('booking.bid_accepted', {
-        bookingId: updated.id,
-        driverId: bid.driverId,
-    });
-
-    return updated;
+    const bid = await MarketplaceService.getBidThread(bidId, { userId: customerId, role: UserRole.CUSTOMER });
+    if (bid.bookingId !== bookingId) throw AppError.notFound('Bid not found for this booking');
+    if (!bid.latestRevisionId) throw AppError.conflict('Bid has no active revision');
+    return MarketplaceService.acceptExactRevision(
+        bidId,
+        bid.latestRevisionId,
+        { userId: customerId, role: UserRole.CUSTOMER },
+    );
 }

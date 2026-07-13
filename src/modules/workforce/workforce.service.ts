@@ -4,6 +4,7 @@ import { getMessaging } from '@config/firebase';
 import { env } from '@config/env';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
+import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment.policy';
 import { notificationService } from '@modules/notifications/notification.service';
 import { gamificationService } from '@modules/gamification/gamification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
@@ -958,6 +959,8 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
 // WALLET — WITHDRAW (creates RazorpayX payout request)
 // ─────────────────────────────────────────────
 export async function withdrawWallet(userId: string, input: WithdrawInput) {
+  assertRazorpayXPayoutsEnabled();
+
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true, bankAccountNo: true, bankIfsc: true, bankName: true, bankAccountHolderName: true, razorpayxContactId: true, razorpayxFundAccountId: true } });
   if (!worker) throw AppError.notFound('Worker not found');
 

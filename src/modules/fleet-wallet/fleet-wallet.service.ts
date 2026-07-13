@@ -1,6 +1,10 @@
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
+import {
+  assertMultiPartyTransfersEnabled,
+  assertRazorpayXPayoutsEnabled,
+} from '@shared/payments/outbound-payment.policy';
 import { WalletTransactionType, WithdrawalEntityType, WithdrawalStatus } from '@prisma/client';
 import { processWithdrawalViaRazorpayX } from '@modules/driver-wallet/driver-wallet.service';
 
@@ -50,6 +54,8 @@ export async function getFleetTransactionHistory(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function requestFleetWithdrawal(fleetOwnerId: string, amount: number) {
+  assertRazorpayXPayoutsEnabled();
+
   if (amount < MIN_WITHDRAWAL) {
     throw AppError.badRequest(`Minimum withdrawal is Rs.${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
   }
@@ -141,6 +147,8 @@ export async function transferToDriver(
   amount:       number,
   note?:        string
 ) {
+  assertMultiPartyTransfersEnabled();
+
   if (amount <= 0) throw AppError.badRequest('Transfer amount must be positive');
 
   const fleetWallet = await prisma.fleetWallet.findUnique({ where: { fleetOwnerId } });
@@ -208,7 +216,8 @@ export async function transferToDriver(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RECORD OFFLINE CASH SALARY (fleet owner paid driver in physical cash)
-// Creates audit record + credits driver DriverWallet so driver can see history
+// Audit-only: the money already moved outside the platform. Never create a
+// second wallet liability for the same cash payment.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function recordOfflineDriverSalary(
@@ -224,37 +233,16 @@ export async function recordOfflineDriverSalary(
     throw AppError.forbidden('Driver does not belong to your fleet');
   }
 
-  return prisma.$transaction(async (tx) => {
-    const record = await tx.cashCollectionRecord.create({
-      data: {
-        entityType:  'DRIVER' as any,
-        entityId:    driverId,
-        amount,
-        collectedBy: fleetOwnerId,
-        note:        note ?? `Offline cash salary from fleet`,
-      },
-    });
-
-    const driverWallet = await tx.driverWallet.upsert({
-      where:  { driverId },
-      create: { driverId, cachedBalance: amount },
-      update: { cachedBalance: { increment: amount } },
-    });
-    const fresh = await tx.driverWallet.findUnique({ where: { driverId } });
-
-    await tx.driverWalletTransaction.create({
-      data: {
-        walletId:    driverWallet.id,
-        type:        WalletTransactionType.CREDIT,
-        reason:      'FLEET_SALARY' as any,
-        amount,
-        balanceAfter: fresh!.cachedBalance,
-        referenceId: record.id,
-        note:        note ?? `Offline cash salary from fleet owner`,
-      },
-    });
-
-    logger.info(`[FleetWallet] Offline salary Rs.${amount} recorded: fleet ${fleetOwnerId} -> driver ${driverId}`);
-    return record;
+  const record = await prisma.cashCollectionRecord.create({
+    data: {
+      entityType:  'DRIVER' as any,
+      entityId:    driverId,
+      amount,
+      collectedBy: fleetOwnerId,
+      note:        note ?? `Offline cash salary from fleet`,
+    },
   });
+
+  logger.info(`[FleetWallet] Offline cash salary audit recorded without wallet credit: Rs.${amount}, fleet ${fleetOwnerId}, driver ${driverId}`);
+  return record;
 }

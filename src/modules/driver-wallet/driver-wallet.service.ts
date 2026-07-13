@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
+import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment.policy';
 import {
   WalletTransactionType,
   DriverWalletReason,
@@ -334,6 +335,8 @@ export async function getDriverTransactionHistory(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function requestWithdrawal(driverId: string, amount: number) {
+  assertRazorpayXPayoutsEnabled();
+
   if (amount < MIN_WITHDRAWAL) {
     throw AppError.badRequest(`Minimum withdrawal is ₹${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
   }
@@ -406,6 +409,9 @@ export async function requestWithdrawal(driverId: string, amount: number) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function processWithdrawalViaRazorpayX(withdrawalRequestId: string) {
+  // Defence in depth: direct/background callers must never bypass the pause.
+  assertRazorpayXPayoutsEnabled();
+
   const withdrawal = await prisma.withdrawalRequest.findUnique({
     where: { id: withdrawalRequestId },
   });

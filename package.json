@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "nodemon --exec ts-node -r tsconfig-paths/register src/server.ts",
     "build": "rimraf dist && tsc && tsc-alias",
+    "test:marketplace": "npm run build && node --test test/marketplace.contract.test.js",
+    "test:outbound-payments": "npm run build && node --test test/outbound-payments.contract.test.js",
     "start": "node dist/server.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",

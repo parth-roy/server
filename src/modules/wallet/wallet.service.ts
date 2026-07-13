@@ -1,5 +1,15 @@
 import { prisma } from '@shared/db/prisma';
-import { PrismaClient, WalletTransactionType, WalletTransactionReason, PaymentStatus } from '@prisma/client';
+import { finalizePaidAward } from '@modules/marketplace/marketplace.service';
+import {
+    BidAwardStatus,
+    BookingMode,
+    PaymentMethod,
+    PaymentStatus,
+    Prisma,
+    PrismaClient,
+    WalletTransactionReason,
+    WalletTransactionType,
+} from '@prisma/client';
 import { AppError } from '@shared/errors/AppError';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -149,7 +159,7 @@ export async function payForBooking(userId: string, bookingId: string) {
         throw AppError.conflict('Booking is already paid');
     }
 
-    const amount = booking.totalFare;
+    const amount = booking.grandTotal ?? booking.totalFare;
     if (!amount || amount <= 0) {
         throw AppError.badRequest('Booking has no valid fare. Cannot pay via wallet.');
     }
@@ -168,6 +178,31 @@ export async function payForBooking(userId: string, bookingId: string) {
     // The WHERE clause enforces cachedBalance >= amount inside the transaction.
     // If two concurrent requests race, only one gets count=1; the other throws.
     const updatedBooking = await prisma.$transaction(async (tx) => {
+        const currentBooking = await tx.booking.findUnique({ where: { id: bookingId } });
+        if (!currentBooking || currentBooking.customerId !== userId) {
+            throw AppError.forbidden('You do not have access to this booking');
+        }
+        if (
+            currentBooking.paymentStatus !== PaymentStatus.PENDING &&
+            currentBooking.paymentStatus !== PaymentStatus.FAILED
+        ) {
+            throw AppError.conflict('Booking payment state changed before wallet debit', 'PAYMENT_STATE_CONFLICT');
+        }
+        if (currentBooking.bookingMode === BookingMode.PRIVATE_BID) {
+            const award = await tx.bidAward.findFirst({
+                where: {
+                    bookingId,
+                    customerId: userId,
+                    activeKey: bookingId,
+                    status: BidAwardStatus.PAYMENT_PENDING,
+                    paymentDeadline: { gt: new Date() },
+                },
+            });
+            if (!award || Math.round(Number(award.customerTotal) * 100) !== Math.round(amount * 100)) {
+                throw AppError.conflict('The selected bid or its payment window is no longer active', 'BID_AWARD_NOT_ACTIVE');
+            }
+        }
+
         const deductResult = await tx.wallet.updateMany({
             where: { userId, cachedBalance: { gte: amount } },
             data: { cachedBalance: { decrement: amount } },
@@ -183,13 +218,20 @@ export async function payForBooking(userId: string, bookingId: string) {
         const updatedWallet = await tx.wallet.findUnique({ where: { userId } });
         const newBalance = updatedWallet!.cachedBalance;
 
-        const paid = await tx.booking.update({
-            where: { id: bookingId },
+        const paidResult = await tx.booking.updateMany({
+            where: {
+                id: bookingId,
+                paymentStatus: { in: [PaymentStatus.PENDING, PaymentStatus.FAILED] },
+            },
             data: {
                 paymentStatus: PaymentStatus.PAID,
                 paymentRef: `WALLET_${Date.now()}`,
+                paymentMethod: PaymentMethod.WALLET,
             },
         });
+        if (paidResult.count !== 1) {
+            throw AppError.conflict('Booking payment state changed during wallet debit', 'PAYMENT_STATE_CONFLICT');
+        }
 
         await tx.walletTransaction.create({
             data: {
@@ -203,9 +245,10 @@ export async function payForBooking(userId: string, bookingId: string) {
             },
         });
 
-        return paid;
-    });
+        return tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
+    await finalizePaidAward(bookingId);
     return updatedBooking;
 }
 

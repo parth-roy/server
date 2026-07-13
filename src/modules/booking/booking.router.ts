@@ -52,6 +52,7 @@ bookingRouter.patch(
 
 bookingRouter.patch(
   '/:id/cancel',
+  requireRole(UserRole.CUSTOMER, UserRole.DRIVER),
   validate(cancelBookingSchema),
   BookingController.cancelBooking
 );

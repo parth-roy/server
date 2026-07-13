@@ -107,6 +107,23 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // ── Outbound payment safety controls ─────────────────────────────
+  // Fail closed until RazorpayX access and the payout flows are certified.
+  // Standard inbound Razorpay collections are not controlled by these flags.
+  RAZORPAYX_PAYOUTS_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  MULTI_PARTY_TRANSFERS_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+
+  // ── Private marketplace bidding ───────────────────────────────────
+  BID_DEFAULT_WINDOW_MINUTES: numStr('10'),
+  BID_PAYMENT_DEADLINE_MINUTES: numStr('10'),
+  BID_PAYMENT_RECONCILE_MINUTES: numStr('15'),
+  BID_REOPEN_WINDOW_MINUTES: numStr('10'),
+  BID_MAX_REVISIONS: numStr('20'),
+  BID_MIN_FARE_MULTIPLIER: numStr('0.5'),
+  BID_MAX_FARE_MULTIPLIER: numStr('2.0'),
+  BID_GST_RATE: numStr('0.05'),
+  BID_ALLOW_CASH: z.enum(['true', 'false']).default('true').transform((value) => value === 'true'),
+
   COINS_PER_100_RUPEES: numStr('10'),
   COIN_VALUE_RUPEES: numStr('0.9'),
   MAX_COIN_REDEMPTION_PERCENT: numStr('20'),

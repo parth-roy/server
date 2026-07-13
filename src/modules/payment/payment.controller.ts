@@ -1,17 +1,14 @@
 import { prisma } from '@shared/db/prisma';
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClient, PaymentStatus, BookingStatus } from '@prisma/client';
+import { PrismaClient, PaymentStatus, BookingStatus, BookingMode, BidAwardStatus, PaymentMethod } from '@prisma/client';
 import { sendSuccess } from '@shared/utils/response';
 import { AppError } from '@shared/errors/AppError';
 import { completeBooking } from '@modules/booking/booking.service';
-import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import { finalizePaidAward } from '@modules/marketplace/marketplace.service';
+import { razorpay } from './razorpay.client';
+import { secureCapturedBookingPayment } from './booking-payment.service';
 
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || '',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
-});
 
 // ─────────────────────────────────────────────
 // CREATE ORDER
@@ -41,6 +38,20 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             throw AppError.conflict('Booking payment has been refunded');
         }
 
+        if (booking.bookingMode === BookingMode.PRIVATE_BID) {
+            const award = await prisma.bidAward.findFirst({
+                where: {
+                    bookingId,
+                    activeKey: bookingId,
+                    status: { in: [BidAwardStatus.PAYMENT_PENDING, BidAwardStatus.PAYMENT_RECONCILING] },
+                },
+            });
+            if (!award) throw AppError.conflict('Select an active bid before creating payment', 'BID_AWARD_REQUIRED');
+            if (award.paymentDeadline.getTime() <= Date.now() && !booking.razorpayOrderId) {
+                throw AppError.conflict('Bid payment deadline has expired', 'PAYMENT_DEADLINE_EXPIRED');
+            }
+        }
+
         // FIX HIGH-15: Idempotency — return the existing unpaid order if one exists,
         // preventing duplicate charges from double-clicks.
         if ((booking as any).razorpayOrderId && booking.paymentStatus === PaymentStatus.PENDING) {
@@ -59,7 +70,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             }
         }
 
-        const amountInPaise = Math.round((booking.totalFare || 0) * 100);
+        const amountInPaise = Math.round((booking.grandTotal ?? booking.totalFare ?? 0) * 100);
 
         if (amountInPaise <= 0) {
             throw AppError.badRequest('Booking has no valid fare amount. Please ensure the booking is confirmed with a calculated fare before payment.');
@@ -77,10 +88,31 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
 
         // FIX CRITICAL-13: Persist the Razorpay order ID on the booking so we can
         // cross-verify it in verifyPayment and block cross-booking replay attacks.
-        await prisma.booking.update({
-            where: { id: bookingId },
-            data: { razorpayOrderId: order.id } as any,
+        const persistedOrder = await prisma.booking.updateMany({
+            where: {
+                id: bookingId,
+                customerId: booking.customerId,
+                paymentStatus: { in: [PaymentStatus.PENDING, PaymentStatus.FAILED] },
+                ...(booking.bookingMode === BookingMode.PRIVATE_BID
+                    ? {
+                        bidAwards: {
+                            some: {
+                                activeKey: bookingId,
+                                status: BidAwardStatus.PAYMENT_PENDING,
+                                paymentDeadline: { gt: new Date() },
+                            },
+                        },
+                    }
+                    : {}),
+            },
+            data: { razorpayOrderId: order.id },
         });
+        if (persistedOrder.count !== 1) {
+            throw AppError.conflict(
+                'The selected bid or payment state changed before the order was created',
+                'PAYMENT_STATE_CONFLICT',
+            );
+        }
 
         sendSuccess(res, {
             orderId: order.id,
@@ -117,6 +149,7 @@ export async function verifyPayment(req: Request, res: Response, next: NextFunct
 
         // Idempotency: webhook may have already marked it paid
         if (booking.paymentStatus === PaymentStatus.PAID) {
+            await finalizePaidAward(bookingId);
             sendSuccess(res, booking, 'Booking payment already confirmed');
             return;
         }
@@ -142,13 +175,28 @@ export async function verifyPayment(req: Request, res: Response, next: NextFunct
             );
         }
 
-        const updatedBooking = await prisma.booking.update({
-            where: { id: bookingId },
-            data: {
-                paymentStatus: PaymentStatus.PAID,
-                paymentRef: razorpay_payment_id,
-            },
+
+        // Bind the verified gateway payment to the exact order, currency and accepted amount.
+        const gatewayPayment = await razorpay.payments.fetch(razorpay_payment_id);
+        if (
+            gatewayPayment.order_id !== razorpay_order_id ||
+            gatewayPayment.currency !== 'INR'
+        ) {
+            throw AppError.badRequest('Payment currency or order does not match this booking', 'PAYMENT_MISMATCH');
+        }
+        if (gatewayPayment.status !== 'captured' && gatewayPayment.captured !== true) {
+            throw AppError.conflict('Payment is not captured yet. Please wait for confirmation.', 'PAYMENT_NOT_CAPTURED');
+        }
+
+        const updatedBooking = await secureCapturedBookingPayment({
+            bookingId,
+            orderId: razorpay_order_id,
+            paymentId: razorpay_payment_id,
+            amountPaise: Number(gatewayPayment.amount),
+            currency: gatewayPayment.currency,
         });
+
+        await finalizePaidAward(updatedBooking.id);
 
         if (updatedBooking.status === BookingStatus.DELIVERED && updatedBooking.driverId) {
             const driver = await prisma.driver.findUnique({ where: { id: updatedBooking.driverId } });
@@ -228,13 +276,15 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
             }
 
             if (booking.paymentStatus !== PaymentStatus.PAID) {
-                const updatedBooking = await prisma.booking.update({
-                    where: { id: actualBookingId },
-                    data: {
-                        paymentStatus: PaymentStatus.PAID,
-                        paymentRef: payment.id,
-                    },
+                const updatedBooking = await secureCapturedBookingPayment({
+                    bookingId: actualBookingId,
+                    orderId: payment.order_id,
+                    paymentId: payment.id,
+                    amountPaise: Number(payment.amount),
+                    currency: payment.currency,
                 });
+
+                await finalizePaidAward(updatedBooking.id);
 
                 if (updatedBooking.status === BookingStatus.DELIVERED && updatedBooking.driverId) {
                     const driver = await prisma.driver.findUnique({ where: { id: updatedBooking.driverId } });
@@ -244,6 +294,9 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                 }
                 console.log(`WEBHOOK: Booking ${actualBookingId} marked PAID via webhook`);
             } else {
+                // The payment transaction may have committed before a previous finalizer attempt
+                // failed. Retrying is safe and closes that recovery gap for marketplace awards.
+                await finalizePaidAward(actualBookingId);
                 console.log(`WEBHOOK: Booking ${actualBookingId} already PAID — skipped (idempotent)`);
             }
 
@@ -260,9 +313,33 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
 
             if (actualBookingId) {
                 const booking = await prisma.booking.findUnique({ where: { id: actualBookingId } });
-                if (booking && booking.paymentStatus !== PaymentStatus.PAID) {
-                    await prisma.booking.update({
-                        where: { id: actualBookingId },
+                if (
+                    booking &&
+                    booking.razorpayOrderId === payment.order_id &&
+                    booking.paymentStatus !== PaymentStatus.PAID
+                ) {
+                    const activeBidAward = booking.bookingMode === BookingMode.PRIVATE_BID
+                        ? await prisma.bidAward.findFirst({
+                            where: {
+                                bookingId: actualBookingId,
+                                activeKey: actualBookingId,
+                                status: {
+                                    in: [BidAwardStatus.PAYMENT_PENDING, BidAwardStatus.PAYMENT_RECONCILING],
+                                },
+                            },
+                        })
+                        : true;
+                    if (!activeBidAward) {
+                        console.warn(`WEBHOOK: Ignored failed payment for inactive bid award ${actualBookingId}`);
+                        res.status(200).json({ status: 'ok' });
+                        return;
+                    }
+                    await prisma.booking.updateMany({
+                        where: {
+                            id: actualBookingId,
+                            razorpayOrderId: payment.order_id,
+                            paymentStatus: PaymentStatus.PENDING,
+                        },
                         data: { paymentStatus: PaymentStatus.FAILED },
                     });
                     console.log(`WEBHOOK: Booking ${actualBookingId} marked FAILED`);
@@ -315,8 +392,11 @@ export async function mockPaymentSuccess(req: Request, res: Response, next: Next
             data: {
                 paymentStatus: PaymentStatus.PAID,
                 paymentRef: 'MOCK_TXN_' + Date.now(),
+                paymentMethod: PaymentMethod.CARD,
             },
         });
+
+        await finalizePaidAward(updatedBooking.id);
 
         if (updatedBooking.status === BookingStatus.DELIVERED && updatedBooking.driverId) {
             const driver = await prisma.driver.findUnique({ where: { id: updatedBooking.driverId } });

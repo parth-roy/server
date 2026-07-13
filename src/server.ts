@@ -12,6 +12,8 @@ import { logger } from '@shared/logger';
 import { getRedis } from '@config/redis';
 import { setupTrackingGateway } from '@modules/tracking/tracking.gateway';
 import { setupWorkforceGateway } from '@modules/workforce/workforce.gateway';
+import { setupMarketplaceGateway } from '@modules/marketplace/marketplace.gateway';
+import { startMarketplaceJobs } from '@modules/marketplace/marketplace.job';
 import { registerEventListeners } from '@shared/eventbus/listeners';
 import { startAllWorkers } from './workers';
 import { startCleanupJobs } from '@shared/jobs/cleanup.job';
@@ -59,6 +61,7 @@ async function bootstrap() {
   // 5. Tracking gateway + workforce gateway + register socket instance
   setupTrackingGateway(io);
   setupWorkforceGateway(io);
+  setupMarketplaceGateway(io);
   setSocketInstance(io); // Allows ETA worker and other workers to emit socket events
 
   // 5.5. Register event bus listeners (booking.confirmed → dispatch, delivered → coins, etc.)
@@ -69,6 +72,7 @@ async function bootstrap() {
 
   // 5.7. Start scheduled engagement push notifications
   startEngagementJobs();
+  startMarketplaceJobs();
 
   // 6. Start BullMQ workers
   try {

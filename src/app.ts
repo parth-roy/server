@@ -29,6 +29,7 @@ import { ulipRouter } from '@modules/ulip/ulip.router';
 import { subscriptionRouter } from '@modules/subscription/subscription.router';
 import { adminRouter } from '@modules/admin/admin.router';
 import { workforceRouter } from '@modules/workforce/workforce.router';
+import { marketplaceRouter } from '@modules/marketplace/marketplace.router';
 import { driverWalletRouter } from '@modules/driver-wallet/driver-wallet.router';
 import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
 import { sentryErrorHandler } from '@config/sentry';
@@ -185,6 +186,7 @@ export function createApp(): Application {
   app.use('/api/v1/subscription', subscriptionRouter);
   app.use('/api/v1/admin',        adminRouter);
   app.use('/api/v1/workforce',    workforceRouter);
+  app.use('/api/v1/marketplace',  marketplaceRouter);
   app.use('/api/v1/driver/wallet', driverWalletRouter);
   app.use('/api/v1/fleet/wallet',  fleetWalletRouter);
 

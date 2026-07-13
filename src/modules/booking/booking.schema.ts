@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { VehicleType, BookingStatus } from '@prisma/client';
+import { VehicleType, BookingStatus, BookingMode } from '@prisma/client';
 
 const stopSchema = z.object({
     latitude: z.number().min(-90).max(90),
@@ -13,6 +13,8 @@ const stopSchema = z.object({
 });
 
 export const createBookingSchema = z.object({
+    bookingMode: z.nativeEnum(BookingMode).default(BookingMode.INSTANT),
+    bidWindowMinutes: z.number().int().min(5).max(60).default(10),
     vehicleType: z.nativeEnum(VehicleType),
     pickupLat: z.number().min(-90).max(90),
     pickupLng: z.number().min(-180).max(180),

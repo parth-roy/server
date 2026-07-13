@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { sendSuccess, sendCreated } from '@shared/utils/response';
 import * as DriverWalletService from './driver-wallet.service';
 import { WithdrawalEntityType } from '@prisma/client';
+import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment.policy';
 
 // GET /driver/wallet
 export async function getWallet(req: Request, res: Response, next: NextFunction) {
@@ -122,6 +123,9 @@ export async function adminCompleteWithdrawalManually(req: Request, res: Respons
 // PATCH /admin/withdrawals/:id/retry
 export async function adminRetryWithdrawal(req: Request, res: Response, next: NextFunction) {
   try {
+    // Check before resetting status so a paused retry cannot mutate history.
+    assertRazorpayXPayoutsEnabled();
+
     const { prisma } = await import('@shared/db/prisma');
     const id = req.params.id as string;
     await prisma.withdrawalRequest.update({ where: { id }, data: { status: 'PENDING' as any } });

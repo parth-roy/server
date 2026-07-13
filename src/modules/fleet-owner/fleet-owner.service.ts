@@ -12,7 +12,15 @@ import { prisma } from '@shared/db/prisma';
  *  7. List pending (CONFIRMED) bookings available to dispatch
  */
 
-import { BookingStatus, UserRole } from '@prisma/client';
+import {
+  BidAwardStatus,
+  BookingMode,
+  BookingStatus,
+  DriverStatus,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
+import { assertTransition } from '@modules/booking/booking.transition';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
@@ -360,7 +368,7 @@ export async function listPendingBookings(
   userId: string,
   query: ListPendingBookingsQuery
 ): Promise<object> {
-  await _requireFleetOwner(userId);
+  const fleetOwner = await _requireFleetOwner(userId);
 
   const { page, limit, vehicleType } = query;
   const skip = (page - 1) * limit;
@@ -368,6 +376,14 @@ export async function listPendingBookings(
   const where: any = {
     status: BookingStatus.CONFIRMED,
     truckAssignment: { is: null }, // not yet assigned to any fleet
+    OR: [
+      { bookingMode: BookingMode.INSTANT },
+      {
+        bookingMode: BookingMode.PRIVATE_BID,
+        awardedFleetOwnerId: fleetOwner.id,
+        bidAwards: { some: { status: BidAwardStatus.CONFIRMED, activeKey: { not: null } } },
+      },
+    ],
     ...(vehicleType && { vehicleType }),
   };
 
@@ -381,6 +397,7 @@ export async function listPendingBookings(
         id: true,
         bookingNumber: true,
         status: true,
+        bookingMode: true,
         vehicleType: true,
         pickupAddress: true,
         pickupLat: true,
@@ -395,6 +412,11 @@ export async function listPendingBookings(
         estimatedDuration: true,
         createdAt: true,
         customer: { select: { name: true } },
+        bidAwards: {
+          where: { status: BidAwardStatus.CONFIRMED, activeKey: { not: null } },
+          select: { revision: { select: { vehicleId: true } } },
+          take: 1,
+        },
       },
     }),
     prisma.booking.count({ where }),
@@ -419,7 +441,14 @@ export async function assignTruckToBooking(
   // Validate booking is CONFIRMED and unassigned
   const booking = await prisma.booking.findUnique({
     where: { id: input.bookingId },
-    include: { truckAssignment: true },
+    include: {
+      truckAssignment: true,
+      bidAwards: {
+        where: { status: BidAwardStatus.CONFIRMED, activeKey: { not: null } },
+        select: { id: true, revision: { select: { vehicleId: true } } },
+        take: 1,
+      },
+    },
   });
   if (!booking) throw AppError.notFound('Booking not found');
   if (booking.status !== BookingStatus.CONFIRMED) {
@@ -431,9 +460,23 @@ export async function assignTruckToBooking(
   if (booking.truckAssignment) {
     throw AppError.conflict('This booking has already been assigned to a fleet', 'ALREADY_ASSIGNED');
   }
+  if (booking.bookingMode === BookingMode.PRIVATE_BID) {
+    if (booking.awardedFleetOwnerId !== fleetOwner.id || booking.bidAwards.length === 0) {
+      throw AppError.forbidden('Only the fleet that won and secured this bid may assign it');
+    }
+    if (booking.bidAwards[0].revision.vehicleId !== input.truckId) {
+      throw AppError.badRequest(
+        'Assign the exact fleet truck committed in the accepted bid revision',
+        'AWARDED_VEHICLE_MISMATCH',
+      );
+    }
+  }
 
   // Validate truck belongs to this fleet and is not already on an active trip
   const truck = await _requireTruckOwnership(input.truckId, fleetOwner.id);
+  if (!truck.isActive || truck.type !== booking.vehicleType) {
+    throw AppError.badRequest('Selected truck does not match the awarded booking', 'VEHICLE_MISMATCH');
+  }
   const activeTripForTruck = await prisma.truckAssignment.findFirst({
     where: {
       truckId: input.truckId,
@@ -455,6 +498,28 @@ export async function assignTruckToBooking(
       'TRUCK_ALREADY_ON_TRIP'
     );
   }
+  const reservedTruckAward = await prisma.bidAward.findFirst({
+    where: {
+      bookingId: { not: input.bookingId },
+      activeKey: { not: null },
+      status: {
+        in: [
+          BidAwardStatus.PAYMENT_PENDING,
+          BidAwardStatus.PAYMENT_RECONCILING,
+          BidAwardStatus.CONFIRMED,
+        ],
+      },
+      booking: { status: BookingStatus.CONFIRMED },
+      revision: { vehicleId: input.truckId },
+    },
+    select: { id: true },
+  });
+  if (reservedTruckAward) {
+    throw AppError.conflict(
+      'This truck is reserved by another accepted private bid',
+      'TRUCK_RESERVED_FOR_BID',
+    );
+  }
 
   // Validate fleet driver belongs to this fleet
   const fleetDriver = await prisma.fleetDriver.findFirst({
@@ -464,12 +529,141 @@ export async function assignTruckToBooking(
     },
   });
   if (!fleetDriver) throw AppError.notFound('Driver not found in your fleet');
+  if (
+    !fleetDriver.driver.isActive ||
+    !fleetDriver.driver.isDocVerified ||
+    fleetDriver.driver.status !== DriverStatus.AVAILABLE
+  ) {
+    throw AppError.conflict('Selected driver is not currently eligible and available', 'DRIVER_NOT_AVAILABLE');
+  }
+  assertTransition(booking.status, BookingStatus.DRIVER_ASSIGNED);
 
   // Execute in a single clean transaction:
   // 1. Create TruckAssignment
   // 2. Update booking → DRIVER_ASSIGNED with fleet driver's Driver record
   // 3. Set truck's current driver
   const { assignment } = await prisma.$transaction(async (tx) => {
+    const currentBooking = await tx.booking.findUnique({
+      where: { id: input.bookingId },
+      include: {
+        truckAssignment: true,
+        bidAwards: {
+          where: { status: BidAwardStatus.CONFIRMED, activeKey: { not: null } },
+          select: { id: true, revision: { select: { vehicleId: true } } },
+          take: 1,
+        },
+      },
+    });
+    if (
+      !currentBooking ||
+      currentBooking.status !== BookingStatus.CONFIRMED ||
+      currentBooking.driverId !== null ||
+      currentBooking.truckAssignment
+    ) {
+      throw AppError.conflict('Booking changed before fleet assignment', 'BOOKING_STATE_CONFLICT');
+    }
+    if (
+      currentBooking.bookingMode === BookingMode.PRIVATE_BID &&
+      (currentBooking.awardedFleetOwnerId !== fleetOwner.id || currentBooking.bidAwards.length === 0)
+    ) {
+      throw AppError.forbidden('Only the fleet that won and secured this bid may assign it');
+    }
+    if (
+      currentBooking.bookingMode === BookingMode.PRIVATE_BID &&
+      currentBooking.bidAwards[0].revision.vehicleId !== input.truckId
+    ) {
+      throw AppError.badRequest(
+        'Assign the exact fleet truck committed in the accepted bid revision',
+        'AWARDED_VEHICLE_MISMATCH',
+      );
+    }
+
+    const [currentTruck, currentFleetDriver, busyTruck, busyDriverBooking, reservedAward] = await Promise.all([
+      tx.fleetTruck.findFirst({
+        where: {
+          id: input.truckId,
+          fleetOwnerId: fleetOwner.id,
+          isActive: true,
+          type: currentBooking.vehicleType,
+        },
+      }),
+      tx.fleetDriver.findFirst({
+        where: { id: input.fleetDriverId, fleetOwnerId: fleetOwner.id, isActive: true },
+        include: { driver: true },
+      }),
+      tx.truckAssignment.findFirst({
+        where: {
+          truckId: input.truckId,
+          booking: {
+            status: {
+              in: [
+                BookingStatus.DRIVER_ASSIGNED,
+                BookingStatus.DRIVER_ARRIVING,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      }),
+      tx.booking.findFirst({
+        where: {
+          driverId: fleetDriver.driverId,
+          status: {
+            in: [
+              BookingStatus.DRIVER_ASSIGNED,
+              BookingStatus.DRIVER_ARRIVING,
+              BookingStatus.PICKED_UP,
+              BookingStatus.IN_TRANSIT,
+            ],
+          },
+        },
+        select: { id: true },
+      }),
+      tx.bidAward.findFirst({
+        where: {
+          bookingId: { not: input.bookingId },
+          activeKey: { not: null },
+          status: {
+            in: [
+              BidAwardStatus.PAYMENT_PENDING,
+              BidAwardStatus.PAYMENT_RECONCILING,
+              BidAwardStatus.CONFIRMED,
+            ],
+          },
+          booking: { status: BookingStatus.CONFIRMED },
+          revision: { vehicleId: input.truckId },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!currentTruck || busyTruck || reservedAward) {
+      throw AppError.conflict('Selected truck is no longer available', 'TRUCK_ALREADY_ON_TRIP');
+    }
+    if (
+      !currentFleetDriver ||
+      !currentFleetDriver.driver.isActive ||
+      !currentFleetDriver.driver.isDocVerified ||
+      currentFleetDriver.driver.status !== DriverStatus.AVAILABLE ||
+      busyDriverBooking
+    ) {
+      throw AppError.conflict('Selected driver is no longer available', 'DRIVER_NOT_AVAILABLE');
+    }
+
+    const reservedDriver = await tx.driver.updateMany({
+      where: {
+        id: currentFleetDriver.driverId,
+        isActive: true,
+        isDocVerified: true,
+        status: DriverStatus.AVAILABLE,
+      },
+      data: { status: DriverStatus.ON_TRIP },
+    });
+    if (reservedDriver.count !== 1) {
+      throw AppError.conflict('Selected driver is no longer available', 'DRIVER_NOT_AVAILABLE');
+    }
+
     const assignment = await tx.truckAssignment.create({
       data: {
         bookingId: input.bookingId,
@@ -479,13 +673,21 @@ export async function assignTruckToBooking(
       },
     });
 
-    await tx.booking.update({
-      where: { id: input.bookingId },
+    const assigned = await tx.booking.updateMany({
+      where: {
+        id: input.bookingId,
+        status: BookingStatus.CONFIRMED,
+        driverId: null,
+        awardedFleetOwnerId: currentBooking.awardedFleetOwnerId,
+      },
       data: {
         status: BookingStatus.DRIVER_ASSIGNED,
-        driverId: fleetDriver.driverId, // link the actual Driver record
+        driverId: currentFleetDriver.driverId,
       },
     });
+    if (assigned.count !== 1) {
+      throw AppError.conflict('Booking changed before fleet assignment', 'BOOKING_STATE_CONFLICT');
+    }
 
     await tx.fleetTruck.update({
       where: { id: input.truckId },
@@ -501,7 +703,7 @@ export async function assignTruckToBooking(
     });
 
     return { assignment };
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
   // Notify the driver via FCM (outside transaction — non-blocking)
   if (fleetDriver.driver.user.fcmToken) {
