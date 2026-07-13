@@ -8,7 +8,7 @@ import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment
 import { notificationService } from '@modules/notifications/notification.service';
 import { gamificationService } from '@modules/gamification/gamification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
-import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType } from '@prisma/client';
+import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType, Prisma } from '@prisma/client';
 import { emitToWorkerRoom, emitToBookingRoom } from '@shared/socket/socket.instance';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -399,28 +399,30 @@ export async function getDashboardStats(userId: string) {
 export async function getAvailableJobs(userId: string, query: AvailableJobsQuery) {
   const worker = await prisma.worker.findUnique({
     where: { userId },
-    select: { id: true, currentLat: true, currentLng: true, preferredTypes: true },
+    select: { id: true, currentLat: true, currentLng: true, preferredTypes: true, maxWeightKg: true, status: true, isDocVerified: true },
   });
   if (!worker) throw AppError.notFound('Worker not found');
 
   const { page, limit, laborType, sortBy, minPayout, maxDistance } = query;
+  if (!worker.isDocVerified) throw AppError.forbidden('Worker verification is required to view jobs');
+  if (worker.status !== WorkerStatus.AVAILABLE) {
+    return { jobs: [], meta: { page, limit, hasMore: false, total: 0 } };
+  }
   const skip = (page - 1) * limit;
 
   // Build laborType filter
   let laborTypeFilter: any = {};
   if (laborType) {
     laborTypeFilter = { laborType: { in: [laborType as LaborType, LaborType.BOTH] } };
+  } else if (worker.preferredTypes.length > 0 && !worker.preferredTypes.includes(LaborType.BOTH)) {
+    laborTypeFilter = { laborType: { in: [...worker.preferredTypes, LaborType.BOTH] } };
   }
-
-  // Build minPayout filter at DB level (pushed into Prisma — zero network waste)
-  const payoutFilter: any = minPayout != null ? { laborCharge: { gte: minPayout } } : {};
 
   // Fetch from DB — extra headroom because we filter open slots in memory
   const bookings = await prisma.booking.findMany({
     where: {
       laborRequired: true,
       ...laborTypeFilter,
-      ...payoutFilter,
       status: {
         in: ['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'] as any[],
       },
@@ -435,6 +437,17 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       laborType: true,
       laborersCount: true,
       laborCharge: true,
+      vehicleType: true,
+      goodsType: true,
+      goodsDescription: true,
+      goodsWeightKg: true,
+      goodsQuantity: true,
+      goodsLengthCm: true,
+      goodsWidthCm: true,
+      goodsHeightCm: true,
+      handlingInstructions: true,
+      goodsImageUrls: true,
+      estimatedDuration: true,
       createdAt: true,
       stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true } },
       jobAssignments: {
@@ -452,7 +465,11 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     .filter(b => {
       const acceptedCount = b.jobAssignments.length;
       const totalSlots = b.laborersCount ?? 1;
-      return acceptedCount < totalSlots;
+      const estimatedUnitWeight = b.goodsWeightKg != null
+        ? b.goodsWeightKg / Math.max(b.goodsQuantity, 1)
+        : null;
+      const withinWorkerCapacity = estimatedUnitWeight == null || estimatedUnitWeight <= worker.maxWeightKg;
+      return acceptedCount < totalSlots && withinWorkerCapacity;
     })
     .map(b => {
       const distanceKm =
@@ -465,16 +482,33 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       return {
         id:             b.id,
         bookingNumber:  b.bookingNumber,
+        pickupLat:      b.pickupLat,
+        pickupLng:      b.pickupLng,
         pickupAddress:  b.pickupAddress,
         dropAddress:    b.stops[0]?.address ?? 'Destination',
         laborType:      b.laborType,
-        payoutAmount:   b.laborCharge ?? 0,
+        payoutAmount:   (b.laborCharge ?? 0) / totalSlots,
         slotsRemaining: totalSlots - acceptedCount,
         totalSlots,
+        vehicleType:    b.vehicleType,
+        goodsType:      b.goodsType,
+        goodsDescription: b.goodsDescription,
+        goodsWeightKg:  b.goodsWeightKg,
+        goodsQuantity:  b.goodsQuantity,
+        goodsLengthCm:  b.goodsLengthCm,
+        goodsWidthCm:   b.goodsWidthCm,
+        goodsHeightCm:  b.goodsHeightCm,
+        handlingInstructions: b.handlingInstructions,
+        goodsImageUrls: b.goodsImageUrls,
+        estimatedDuration: b.estimatedDuration,
         distanceKm,
         createdAt:      b.createdAt,
       };
     });
+
+  if (minPayout != null) {
+    openBookings = openBookings.filter(b => b.payoutAmount >= minPayout);
+  }
 
   // Apply maxDistance filter after haversine (can't do in DB without PostGIS)
   if (maxDistance != null && worker.currentLat != null) {
@@ -521,6 +555,17 @@ export async function getActiveJob(userId: string) {
           pickupAddress: true,
           laborType: true,
           laborersCount: true,
+          vehicleType: true,
+          goodsType: true,
+          goodsDescription: true,
+          goodsWeightKg: true,
+          goodsQuantity: true,
+          goodsLengthCm: true,
+          goodsWidthCm: true,
+          goodsHeightCm: true,
+          handlingInstructions: true,
+          goodsImageUrls: true,
+          estimatedDuration: true,
           status: true,
           stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true, latitude: true, longitude: true } },
         },
@@ -540,48 +585,69 @@ export async function acceptJob(userId: string, bookingId: string) {
     select: { id: true, status: true, isDocVerified: true },
   });
   if (!worker) throw AppError.notFound('Worker not found');
+  if (!worker.isDocVerified) throw AppError.forbidden('Worker verification is required before accepting jobs');
   if (worker.status === WorkerStatus.ON_JOB) throw AppError.conflict('Already on an active job', 'ON_JOB');
-
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    select: { id: true, laborersCount: true, laborRequired: true, status: true, laborCharge: true },
-  });
-
-  if (!booking) throw AppError.notFound('Booking not found');
-  if (!booking.laborRequired) throw AppError.badRequest('Booking does not require labor');
-
-  // Check if job is already full
-  const acceptedCount = await prisma.jobAssignment.count({
-    where: {
-      bookingId,
-      status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
-    },
-  });
-  const totalSlots = booking.laborersCount ?? 1;
-  if (acceptedCount >= totalSlots) {
-    throw AppError.conflict('This job is already full', 'JOB_FULL');
+  if (worker.status !== WorkerStatus.AVAILABLE) {
+    throw AppError.conflict('Go online before accepting a job', 'WORKER_NOT_AVAILABLE');
   }
 
-  const existing = await prisma.jobAssignment.findFirst({
-    where: { bookingId, workerId: worker.id },
-  });
-  if (existing) throw AppError.conflict('Already responded to this job');
+  let acceptedResult: { assignment: any; newAcceptedCount: number; totalSlots: number } | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      acceptedResult = await prisma.$transaction(async (tx) => {
+        const booking = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { id: true, laborersCount: true, laborRequired: true, status: true, laborCharge: true },
+        });
+        if (!booking) throw AppError.notFound('Booking not found');
+        if (!booking.laborRequired) throw AppError.badRequest('Booking does not require labor');
+        if (!['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'].includes(booking.status)) {
+          throw AppError.conflict('This workforce job is no longer open', 'JOB_NOT_OPEN');
+        }
 
-  const assignment = await prisma.jobAssignment.create({
-    data: {
-      bookingId,
-      workerId: worker.id,
-      status: WorkerJobStatus.ACCEPTED,
-      payoutAmount: booking.laborCharge ?? 0,
-    },
-  });
+        const existing = await tx.jobAssignment.findUnique({
+          where: { bookingId_workerId: { bookingId, workerId: worker.id } },
+        });
+        if (existing) throw AppError.conflict('Already responded to this job');
 
-  await prisma.worker.update({
-    where: { id: worker.id },
-    data: { status: WorkerStatus.ON_JOB },
-  });
+        const acceptedCount = await tx.jobAssignment.count({
+          where: {
+            bookingId,
+            status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+          },
+        });
+        const totalSlots = booking.laborersCount ?? 1;
+        if (acceptedCount >= totalSlots) {
+          throw AppError.conflict('This job is already full', 'JOB_FULL');
+        }
 
-  const newAcceptedCount = acceptedCount + 1;
+        const assignment = await tx.jobAssignment.create({
+          data: {
+            bookingId,
+            workerId: worker.id,
+            status: WorkerJobStatus.ACCEPTED,
+            payoutAmount: (booking.laborCharge ?? 0) / totalSlots,
+          },
+        });
+        const workerClaim = await tx.worker.updateMany({
+          where: { id: worker.id, status: WorkerStatus.AVAILABLE, isDocVerified: true },
+          data: { status: WorkerStatus.ON_JOB },
+        });
+        if (workerClaim.count !== 1) {
+          throw AppError.conflict('Worker is no longer available', 'WORKER_NOT_AVAILABLE');
+        }
+        return { assignment, newAcceptedCount: acceptedCount + 1, totalSlots };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      break;
+    } catch (error: any) {
+      if (error?.code === 'P2034' && attempt < 3) continue;
+      if (error?.code === 'P2002') throw AppError.conflict('Already responded to this job');
+      throw error;
+    }
+  }
+  if (!acceptedResult) throw AppError.conflict('Job acceptance conflicted. Please try again.', 'JOB_ACCEPT_CONFLICT');
+
+  const { assignment, newAcceptedCount, totalSlots } = acceptedResult;
   if (newAcceptedCount >= totalSlots) {
     emitToBookingRoom(bookingId, 'workers_fully_assigned', {
       bookingId,
@@ -926,6 +992,10 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       laborCharge: true,
       laborType: true,
       laborersCount: true,
+      vehicleType: true,
+      goodsType: true,
+      goodsWeightKg: true,
+      goodsQuantity: true,
       jobAssignments: {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
         select: { id: true },
@@ -945,9 +1015,13 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       pickupLat: job.pickupLat,
       pickupLng: job.pickupLng,
       pickupAddress: job.pickupAddress,
-      laborCharge: job.laborCharge,
+      laborCharge: (job.laborCharge ?? 0) / (job.laborersCount ?? 1),
       laborType: job.laborType,
       laborersCount: job.laborersCount,
+      vehicleType: job.vehicleType,
+      goodsType: job.goodsType,
+      goodsWeightKg: job.goodsWeightKg,
+      goodsQuantity: job.goodsQuantity,
       distanceKm: haversineKm(lat, lng, job.pickupLat, job.pickupLng)
     }))
     .filter(job => job.distanceKm <= radiusKm);

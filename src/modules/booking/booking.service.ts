@@ -12,6 +12,8 @@ import {
     PaymentMethod,
     Prisma,
     UserRole,
+    WorkerJobStatus,
+    WorkerStatus,
 } from '@prisma/client';
 import { randomInt, randomUUID } from 'crypto';
 import { AppError } from '@shared/errors/AppError';
@@ -61,6 +63,21 @@ const bookingDetailSelect = {
     vehicleType: true,
     declineCount: true,
     hasLoadingService: true,
+    goodsType: true,
+    goodsDescription: true,
+    goodsWeightKg: true,
+    goodsQuantity: true,
+    goodsLengthCm: true,
+    goodsWidthCm: true,
+    goodsHeightCm: true,
+    declaredGoodsValue: true,
+    handlingInstructions: true,
+    containsRestrictedGoods: true,
+    goodsImageUrls: true,
+    laborRequired: true,
+    laborersCount: true,
+    laborType: true,
+    laborCharge: true,
     pickupLat: true,
     pickupLng: true,
     pickupAddress: true,
@@ -156,6 +173,13 @@ async function getDriverBooking(bookingId: string, userId: string) {
 export async function createBooking(customerId: string, data: CreateBookingInput) {
     const { stops, estimatedFare, estimatedDistanceKm, dropLat, dropLng, dropAddress, ...bookingData } = data as any;
 
+    if (data.containsRestrictedGoods) {
+        throw AppError.badRequest(
+            'Restricted or hazardous goods cannot be booked through the standard flow. Contact support for compliance review.',
+            'RESTRICTED_GOODS_NOT_SUPPORTED'
+        );
+    }
+
     // ── SAME LOCATION CHECK ────────────────────────────────────────────────────
     if (stops.length > 0) {
         const dLat = Math.abs(stops[0].latitude - data.pickupLat);
@@ -215,7 +239,8 @@ export async function createBooking(customerId: string, data: CreateBookingInput
             dropLat: stops[0].latitude,
             dropLng: stops[0].longitude,
             vehicleType: data.vehicleType,
-            hasLoadingService: data.hasLoadingService,
+            hasLoadingService: data.laborRequired || data.hasLoadingService,
+            helperCount: data.laborRequired ? data.laborersCount : undefined,
             insuranceOpted: data.insuranceOpted,
         });
     } catch (err) {
@@ -228,6 +253,17 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         throw AppError.badRequest(
             'Delivery distance exceeds maximum allowed (500 km)',
             'DISTANCE_TOO_FAR'
+        );
+    }
+
+    if (
+        data.goodsWeightKg !== undefined &&
+        Number(serverFare.vehicle.capacityKg) > 0 &&
+        data.goodsWeightKg > Number(serverFare.vehicle.capacityKg)
+    ) {
+        throw AppError.badRequest(
+            `Declared goods weight exceeds this vehicle's ${serverFare.vehicle.capacityKg} kg capacity.`,
+            'VEHICLE_CAPACITY_EXCEEDED'
         );
     }
 
@@ -250,6 +286,11 @@ export async function createBooking(customerId: string, data: CreateBookingInput
             booking = await prisma.booking.create({
                 data: {
                     ...bookingData,
+                    hasLoadingService: data.laborRequired || data.hasLoadingService,
+                    laborRequired: data.laborRequired,
+                    laborersCount: data.laborRequired ? data.laborersCount : null,
+                    laborType: data.laborRequired ? data.laborType : null,
+                    laborCharge: data.laborRequired ? serverFare.fareBreakdown.loadingCharge : null,
                     customerId,
                     bookingNumber: generateBookingNumber(),
                     status: BookingStatus.DRAFT,
@@ -541,6 +582,42 @@ export async function cancelBooking(
             await tx.driver.updateMany({
                 where: { id: current.driverId, status: DriverStatus.ON_TRIP },
                 data: { status: DriverStatus.AVAILABLE },
+            });
+        }
+
+        const activeWorkerAssignments = await tx.jobAssignment.findMany({
+            where: {
+                bookingId,
+                status: {
+                    in: [
+                        WorkerJobStatus.ACCEPTED,
+                        WorkerJobStatus.ARRIVED,
+                        WorkerJobStatus.IN_PROGRESS,
+                    ],
+                },
+            },
+            select: { workerId: true },
+        });
+        if (activeWorkerAssignments.length > 0) {
+            await tx.jobAssignment.updateMany({
+                where: {
+                    bookingId,
+                    status: {
+                        in: [
+                            WorkerJobStatus.ACCEPTED,
+                            WorkerJobStatus.ARRIVED,
+                            WorkerJobStatus.IN_PROGRESS,
+                        ],
+                    },
+                },
+                data: { status: WorkerJobStatus.CANCELLED },
+            });
+            await tx.worker.updateMany({
+                where: {
+                    id: { in: activeWorkerAssignments.map((assignment) => assignment.workerId) },
+                    status: WorkerStatus.ON_JOB,
+                },
+                data: { status: WorkerStatus.AVAILABLE },
             });
         }
 

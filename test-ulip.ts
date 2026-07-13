@@ -1,0 +1,1 @@
+import * as dotenv from 'dotenv'; dotenv.config(); import { getUlipToken, verifyDigilocker } from './src/modules/ulip/ulip.service'; verifyDigilocker('123456789012', 'AADHAAR').then(console.log).catch(e => console.error(e.response?.data || e.message));

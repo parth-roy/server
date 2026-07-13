@@ -63,5 +63,6 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" || true
             cd /home/ubuntu/server
             npm install --omit=dev
+            npx prisma migrate deploy
             npx prisma generate
             pm2 restart logistic-server --update-env || pm2 start dist/server.js --name "logistic-server"

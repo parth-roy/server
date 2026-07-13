@@ -75,6 +75,19 @@ const bidThreadInclude = {
       pickupLat: true,
       pickupLng: true,
       vehicleType: true,
+      goodsType: true,
+      goodsDescription: true,
+      goodsWeightKg: true,
+      goodsQuantity: true,
+      goodsLengthCm: true,
+      goodsWidthCm: true,
+      goodsHeightCm: true,
+      declaredGoodsValue: true,
+      handlingInstructions: true,
+      goodsImageUrls: true,
+      laborRequired: true,
+      laborersCount: true,
+      laborType: true,
       estimatedDistance: true,
       estimatedDuration: true,
       totalFare: true,
@@ -301,7 +314,7 @@ async function resolveParticipantIdentity(actor: Actor): Promise<ParticipantIden
 
 function validateParticipantEligibility(
   participant: ParticipantIdentity,
-  booking: { vehicleType: string },
+  booking: { vehicleType: string; goodsWeightKg?: number | null },
   requestedVehicleId?: string,
   requireExplicitFleetVehicle = false,
 ) {
@@ -318,6 +331,13 @@ function validateParticipantEligibility(
     }
     if (!driver.vehicle || !driver.vehicle.isActive || driver.vehicle.type !== booking.vehicleType) {
       throw AppError.badRequest('Your active vehicle does not match this load', 'VEHICLE_MISMATCH');
+    }
+    if (
+      booking.goodsWeightKg != null &&
+      driver.vehicle.capacityKg != null &&
+      booking.goodsWeightKg > Number(driver.vehicle.capacityKg)
+    ) {
+      throw AppError.badRequest('Declared load weight exceeds your vehicle capacity', 'VEHICLE_CAPACITY_EXCEEDED');
     }
     return {
       vehicleId: driver.vehicle.id,
@@ -345,6 +365,13 @@ function validateParticipantEligibility(
     : fleet.trucks.find((item: any) => item.type === booking.vehicleType);
   if (!truck || truck.type !== booking.vehicleType || !truck.isActive) {
     throw AppError.badRequest('Select an active matching fleet truck for this offer', 'VEHICLE_MISMATCH');
+  }
+  if (
+    booking.goodsWeightKg != null &&
+    truck.capacityKg != null &&
+    booking.goodsWeightKg > Number(truck.capacityKg)
+  ) {
+    throw AppError.badRequest('Declared load weight exceeds the selected truck capacity', 'VEHICLE_CAPACITY_EXCEEDED');
   }
   return {
     vehicleId: truck.id,
@@ -553,6 +580,19 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
         pickupLng: true,
         stops: { orderBy: { sequence: 'asc' }, select: { address: true, latitude: true, longitude: true } },
         vehicleType: true,
+        goodsType: true,
+        goodsDescription: true,
+        goodsWeightKg: true,
+        goodsQuantity: true,
+        goodsLengthCm: true,
+        goodsWidthCm: true,
+        goodsHeightCm: true,
+        declaredGoodsValue: true,
+        handlingInstructions: true,
+        goodsImageUrls: true,
+        laborRequired: true,
+        laborersCount: true,
+        laborType: true,
         estimatedDistance: true,
         estimatedDuration: true,
         totalFare: true,
@@ -610,6 +650,19 @@ export async function getOpportunity(bookingId: string, actor: Actor) {
     pickupLng: booking.pickupLng,
     stops: booking.stops,
     vehicleType: booking.vehicleType,
+    goodsType: booking.goodsType,
+    goodsDescription: booking.goodsDescription,
+    goodsWeightKg: booking.goodsWeightKg,
+    goodsQuantity: booking.goodsQuantity,
+    goodsLengthCm: booking.goodsLengthCm,
+    goodsWidthCm: booking.goodsWidthCm,
+    goodsHeightCm: booking.goodsHeightCm,
+    declaredGoodsValue: booking.declaredGoodsValue,
+    handlingInstructions: booking.handlingInstructions,
+    goodsImageUrls: booking.goodsImageUrls,
+    laborRequired: booking.laborRequired,
+    laborersCount: booking.laborersCount,
+    laborType: booking.laborType,
     estimatedDistance: booking.estimatedDistance,
     estimatedDuration: booking.estimatedDuration,
     totalFare: booking.totalFare,

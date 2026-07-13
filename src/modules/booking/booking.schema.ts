@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { VehicleType, BookingStatus, BookingMode } from '@prisma/client';
+import { VehicleType, BookingStatus, BookingMode, LaborType } from '@prisma/client';
 
 const stopSchema = z.object({
     latitude: z.number().min(-90).max(90),
@@ -24,6 +24,20 @@ export const createBookingSchema = z.object({
         .min(1, 'At least one delivery stop is required')
         .max(10, 'Maximum 10 stops allowed per booking'),
     hasLoadingService: z.boolean().default(false),
+    goodsType: z.string().trim().min(2).max(80).default('General Goods'),
+    goodsDescription: z.string().trim().min(2).max(500),
+    goodsWeightKg: z.number().positive().max(100_000),
+    goodsQuantity: z.number().int().min(1).max(10_000).default(1),
+    goodsLengthCm: z.number().positive().max(5_000).optional(),
+    goodsWidthCm: z.number().positive().max(5_000).optional(),
+    goodsHeightCm: z.number().positive().max(5_000).optional(),
+    declaredGoodsValue: z.number().min(0).max(1_000_000_000).optional(),
+    handlingInstructions: z.string().trim().max(1_000).optional(),
+    containsRestrictedGoods: z.boolean().default(false),
+    goodsImageUrls: z.array(z.string().url()).max(5).default([]),
+    laborRequired: z.boolean().default(false),
+    laborersCount: z.number().int().min(1).max(10).optional(),
+    laborType: z.nativeEnum(LaborType).optional(),
     receiverName: z.string().min(2).max(100).optional(),
     receiverPhone: z
         .string()
@@ -41,6 +55,37 @@ export const createBookingSchema = z.object({
     dropLat: z.number().optional(),
     dropLng: z.number().optional(),
     dropAddress: z.string().optional(),
+}).superRefine((value, ctx) => {
+    const dimensions = [value.goodsLengthCm, value.goodsWidthCm, value.goodsHeightCm];
+    const suppliedDimensions = dimensions.filter((dimension) => dimension !== undefined).length;
+    if (suppliedDimensions > 0 && suppliedDimensions < 3) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['goodsLengthCm'],
+            message: 'Provide length, width and height together, or leave all dimensions empty',
+        });
+    }
+    if (value.laborRequired && value.laborersCount === undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['laborersCount'],
+            message: 'Number of labourers is required when workforce help is selected',
+        });
+    }
+    if (value.laborRequired && value.laborType === undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['laborType'],
+            message: 'Labour type is required when workforce help is selected',
+        });
+    }
+    if (!value.laborRequired && (value.laborersCount !== undefined || value.laborType !== undefined)) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['laborRequired'],
+            message: 'Enable workforce help before providing labour details',
+        });
+    }
 });
 
 export const cancelBookingSchema = z.object({

@@ -694,6 +694,20 @@ model Booking {
   vehicleType       VehicleType
   hasLoadingService Boolean     @default(false)
 
+  // Goods/load declaration captured before pricing and provider discovery.
+  // Defaults keep pre-existing rows readable while new clients send the full declaration.
+  goodsType               String   @default("General Goods")
+  goodsDescription        String?
+  goodsWeightKg           Float?
+  goodsQuantity           Int      @default(1)
+  goodsLengthCm           Float?
+  goodsWidthCm            Float?
+  goodsHeightCm           Float?
+  declaredGoodsValue      Float?
+  handlingInstructions    String?
+  containsRestrictedGoods Boolean  @default(false)
+  goodsImageUrls          String[] @default([])
+
   receiverName  String?
   receiverPhone String?
 
@@ -780,7 +794,7 @@ model Booking {
   laborRequired Boolean      @default(false) // Does this booking need loading/unloading workers?
   laborersCount Int? // How many workers are needed (e.g., 3)
   laborType     LaborType? // LOADING | UNLOADING | BOTH
-  laborCharge   Float? // Platform-calculated payout per worker × count
+  laborCharge   Float? // Platform-calculated total labour charge; each assignment receives total / count
   ScratchCard   ScratchCard?
 
   @@index([status])
