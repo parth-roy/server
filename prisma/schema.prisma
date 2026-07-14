@@ -1811,3 +1811,28 @@ model WorkerTrainingProgress {
   @@unique([workerId, courseId])
   @@map("worker_training_progress")
 }
+
+// ─────────────────────────────────────────────
+// WORKFORCE LEADS
+// ─────────────────────────────────────────────
+
+enum LeadStatus {
+  PENDING
+  CONTACTED
+  CONVERTED
+  REJECTED
+}
+
+model WorkforceLead {
+  id        String     @id @default(uuid())
+  name      String
+  phone     String
+  city      String
+  role      String
+  status    LeadStatus @default(PENDING)
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@map("workforce_leads")
+}

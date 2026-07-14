@@ -32,6 +32,7 @@ import { workforceRouter } from '@modules/workforce/workforce.router';
 import { marketplaceRouter } from '@modules/marketplace/marketplace.router';
 import { driverWalletRouter } from '@modules/driver-wallet/driver-wallet.router';
 import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
+import { publicLeadsRouter, adminLeadsRouter } from '@modules/leads/leads.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
@@ -187,12 +188,14 @@ export function createApp(): Application {
   app.use('/api/v1/admin',        adminRouter);
   app.use('/api/v1/workforce',    workforceRouter);
   app.use('/api/v1/marketplace',  marketplaceRouter);
-  app.use('/api/v1/driver/wallet', driverWalletRouter);
-  app.use('/api/v1/fleet/wallet',  fleetWalletRouter);
+  app.use('/api/v1/driver-wallet', driverWalletRouter);
+  app.use('/api/v1/fleet-wallet',  fleetWalletRouter);
 
+  // Leads
+  app.use('/api/v1/leads', publicLeadsRouter);
+  app.use('/api/v1/admin/leads', adminLeadsRouter);
 
   app.use(notFoundHandler);
-  // Sentry error handler MUST come before our custom error handler
   app.use(sentryErrorHandler);
   app.use(globalErrorHandler);
 

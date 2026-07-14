@@ -38,9 +38,9 @@ import * as MarketplaceService from '@modules/marketplace/marketplace.service';
 import { assertTransition } from './booking.transition';
 export { assertTransition } from './booking.transition';
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // HELPERS
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function generateBookingNumber(): string {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
@@ -48,7 +48,7 @@ function generateBookingNumber(): string {
     return `BK${dateStr}${random}`;
 }
 
-// Reusable select shape — used for every response that returns a full booking
+// Reusable select shape â€” used for every response that returns a full booking
 const bookingDetailSelect = {
     id: true,
     bookingNumber: true,
@@ -151,7 +151,7 @@ const bookingDetailSelect = {
     pickupOtp: true,
 } as const;
 
-// Internal helper — verifies the calling driver owns the booking
+// Internal helper â€” verifies the calling driver owns the booking
 async function getDriverBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw AppError.notFound('Driver profile not found');
@@ -166,9 +166,9 @@ async function getDriverBooking(bookingId: string, userId: string) {
     return { booking, driver };
 }
 
-// ─────────────────────────────────────────────
-// CUSTOMER — CREATE BOOKING
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// CUSTOMER â€” CREATE BOOKING
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function createBooking(customerId: string, data: CreateBookingInput) {
     const { stops, estimatedFare, estimatedDistanceKm, dropLat, dropLng, dropAddress, ...bookingData } = data as any;
@@ -180,7 +180,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         );
     }
 
-    // ── SAME LOCATION CHECK ────────────────────────────────────────────────────
+    // â”€â”€ SAME LOCATION CHECK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (stops.length > 0) {
         const dLat = Math.abs(stops[0].latitude - data.pickupLat);
         const dLng = Math.abs(stops[0].longitude - data.pickupLng);
@@ -192,7 +192,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         }
     }
 
-    // ── SERVICE AREA CHECK (Mapbox reverse geocode → country = India) ─────────
+    // â”€â”€ SERVICE AREA CHECK (Mapbox reverse geocode â†’ country = India) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Primary: Mapbox reverse geocode. Fallback: bounding box (if Mapbox down).
     // Both pickup AND first stop must be in serviceable area.
     const [pickupServiceability, dropServiceability] = await Promise.all([
@@ -213,7 +213,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         );
     }
 
-    // ── FIX HIGH-8: Driver availability check ─────────────────────────────────
+    // â”€â”€ FIX HIGH-8: Driver availability check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const availableDriverCount = await prisma.driver.count({
         where: {
             status: 'AVAILABLE',
@@ -230,7 +230,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
     //     );
     // }
 
-    // ── FIX CRITICAL-1: Server-side fare recalculation ────────────────────────
+    // â”€â”€ FIX CRITICAL-1: Server-side fare recalculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let serverFare: FareEstimateResponse;
     try {
         serverFare = await pricingService.estimateFare({
@@ -248,7 +248,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         throw AppError.internal('Unable to calculate fare. Please try again.');
     }
 
-    // ── Maximum distance validation removed for all-India service ──────────────
+    // â”€â”€ Maximum distance validation removed for all-India service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     if (
         data.goodsWeightKg !== undefined &&
@@ -266,13 +266,13 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         const deviation = Math.abs(estimatedFare - serverFare.totalFare) / serverFare.totalFare;
         if (deviation > 0.10) {
             throw AppError.badRequest(
-                `Fare has changed. Server fare: ₹${serverFare.totalFare}. Please refresh and try again.`,
+                `Fare has changed. Server fare: â‚¹${serverFare.totalFare}. Please refresh and try again.`,
                 'FARE_MISMATCH'
             );
         }
     }
 
-    // ── FIX MEDIUM-7: Booking number collision retry ──────────────────────────
+    // â”€â”€ FIX MEDIUM-7: Booking number collision retry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let booking = null;
     let lastError: any = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -322,12 +322,12 @@ export async function createBooking(customerId: string, data: CreateBookingInput
 
     if (!booking) throw AppError.internal('Failed to generate unique booking number');
 
-    logger.info(`Booking created: ${booking.bookingNumber} by customer ${customerId} (fare: ₹${serverFare.totalFare})`);
+    logger.info(`Booking created: ${booking.bookingNumber} by customer ${customerId} (fare: â‚¹${serverFare.totalFare})`);
     return booking;
 }
-// ─────────────────────────────────────────────
-// CUSTOMER — LIST MY BOOKINGS
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// CUSTOMER â€” LIST MY BOOKINGS
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function listBookings(userId: string, role: string, query: ListBookingsQuery) {
     const { page, limit, status } = query;
@@ -371,10 +371,10 @@ export async function listBookings(userId: string, role: string, query: ListBook
     };
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // GET ONE BOOKING
 // Customers see their own. Drivers see assigned ones. Admin sees all.
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getBooking(bookingId: string, userId: string, role: string) {
     const booking = await prisma.booking.findUnique({
@@ -420,9 +420,9 @@ export async function getBooking(bookingId: string, userId: string, role: string
     return booking;
 }
 
-// ─────────────────────────────────────────────
-// CUSTOMER — CONFIRM BOOKING (DRAFT → CONFIRMED)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// CUSTOMER â€” CONFIRM BOOKING (DRAFT â†’ CONFIRMED)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function confirmBooking(bookingId: string, customerId: string) {
     const booking = await prisma.booking.findFirst({
@@ -464,10 +464,10 @@ export async function confirmBooking(bookingId: string, customerId: string) {
     return updated;
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // CANCEL BOOKING
-// Both customers and drivers can cancel — with different state rules
-// ─────────────────────────────────────────────
+// Both customers and drivers can cancel â€” with different state rules
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function cancelBooking(
     bookingId: string,
@@ -624,7 +624,7 @@ export async function cancelBooking(
         });
     }
 
-    // ── AUTO REFUND: if customer paid via wallet, refund instantly ────────────
+    // â”€â”€ AUTO REFUND: if customer paid via wallet, refund instantly â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Uses fire-and-forget to not block the cancellation response.
     const fullBooking = await prisma.booking.findUnique({
         where: { id: bookingId },
@@ -652,10 +652,10 @@ export async function cancelBookingBySystem(bookingId: string, reason: string, c
     return cancelBooking(bookingId, cancelledBy, UserRole.ADMIN, { reason });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 // CUSTOMER — RATE BOOKING
 // Only allowed after COMPLETED status
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 
 export async function rateBooking(
     bookingId: string,
@@ -694,9 +694,9 @@ export async function rateBooking(
     });
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — GET ACTIVE BOOKING
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” GET ACTIVE BOOKING
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getDriverActiveBooking(userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
@@ -726,16 +726,24 @@ export async function getDriverActiveBooking(userId: string) {
 
 export async function markDriverArriving(bookingId: string, userId: string) {
     const { booking } = await getDriverBooking(bookingId, userId);
+    
+    const updateData: any = {
+        status: BookingStatus.DRIVER_ARRIVING,
+        arrivalTime: new Date(),
+    };
+    
+    // If OTP is missing (e.g. bypassed /accept via bidding), generate it now
+    if (!(booking as any).pickupOtp) {
+        updateData.pickupOtp = String(randomInt(1000, 9999));
+    }
+
     if (booking.status !== BookingStatus.DRIVER_ARRIVING) {
         assertTransition(booking.status, BookingStatus.DRIVER_ARRIVING);
     }
 
     const updated = await prisma.booking.update({
         where: { id: bookingId },
-        data: {
-            status: BookingStatus.DRIVER_ARRIVING,
-            arrivalTime: new Date(),
-        },
+        data: updateData,
         select: bookingDetailSelect,
     });
 
@@ -748,51 +756,37 @@ export async function markDriverArriving(bookingId: string, userId: string) {
             data: { type: 'DRIVER_ARRIVING', bookingId },
         });
     }
+    
+    const finalOtp = updateData.pickupOtp || (booking as any).pickupOtp;
     await createNotification(
         updated.customerId,
-        '🏃 Driver is Almost There!',
-        'Your driver is on the way. Keep your goods ready to load!',
+        'DRIVER_ARRIVING',
+        `Your driver is on the way. Your pickup OTP is ${finalOtp}.`,
         NotificationType.BOOKING_STATUS,
-        bookingId,
+        bookingId
     );
+    const { emitToBookingRoom } = await import('@shared/socket/socket.instance');
+    emitToBookingRoom(bookingId, 'booking_update', { type: 'DRIVER_ARRIVING', pickupOtp: finalOtp });
 
-    eventBus.emit('booking.driver_arriving', { bookingId, customerId: updated.customerId });
     return updated;
 }
 
 // ─────────────────────────────────────────────
-// DRIVER — MARK PICKED UP (DRIVER_ARRIVING → PICKED_UP)
+// DRIVER — VERIFY PICKUP OTP (DRIVER_ARRIVING → PICKED_UP)
 // ─────────────────────────────────────────────
 
 export async function markPickedUp(bookingId: string, userId: string) {
-    const { booking } = await getDriverBooking(bookingId, userId);
+    const { booking, driver } = await getDriverBooking(bookingId, userId);
     assertTransition(booking.status, BookingStatus.PICKED_UP);
 
     const pickedUpAt = new Date();
-
-    // Compute waiting charge if arrivalTime was recorded
+    const arrivalTime = booking.arrivalTime ?? pickedUpAt;
+    
+    // Calculate waiting charge (10 mins free)
     let waitingCharge = 0;
-    if ((booking as any).arrivalTime) {
-        try {
-            const vehicle = await prisma.vehicleTypePricing.findUnique({
-                where: { vehicleType: booking.vehicleType as any },
-            });
-            if (vehicle) {
-                const { pricingService } = await import('@modules/pricing/pricing.service');
-                const waitingResult = pricingService.calculateWaitingCharge(
-                    (booking as any).arrivalTime,
-                    pickedUpAt,
-                    vehicle,
-                );
-                waitingCharge = waitingResult.waitingCharge;
-                if (waitingCharge > 0) {
-                    logger.info(`[Booking] Waiting charge: ₹${waitingCharge} for booking ${bookingId}`);
-                }
-            }
-        } catch (err) {
-            logger.error('[Booking] Failed to compute waiting charge:', err);
-            // Non-fatal — proceed without waiting charge
-        }
+    const diffMins = Math.floor((pickedUpAt.getTime() - arrivalTime.getTime()) / 60000);
+    if (diffMins > 10) {
+        waitingCharge = (diffMins - 10) * 5; // e.g. 5 rupees per min
     }
 
     const updated = await prisma.booking.update({
@@ -801,6 +795,7 @@ export async function markPickedUp(bookingId: string, userId: string) {
             status: BookingStatus.PICKED_UP,
             actualPickupTime: pickedUpAt,
             ...(waitingCharge > 0 && { waitingCharge }),
+            pickupOtp: null, // Clear OTP after use for security
         },
         select: bookingDetailSelect,
     });
@@ -809,9 +804,9 @@ export async function markPickedUp(bookingId: string, userId: string) {
     return updated;
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — REQUEST POD OTP
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” REQUEST POD OTP
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function requestPodOtp(
     bookingId: string,
@@ -855,10 +850,10 @@ export async function requestPodOtp(
     return { success: true, message: 'OTP sent to customer' };
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — DELIVER A STOP WITH POD
-// When all stops done → booking moves to DELIVERED automatically
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” DELIVER A STOP WITH POD
+// When all stops done â†’ booking moves to DELIVERED automatically
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function verifyPodAndDeliverStop(
     bookingId: string,
@@ -944,10 +939,10 @@ export async function verifyPodAndDeliverStop(
     return updated;
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — COMPLETE BOOKING (DELIVERED → COMPLETED)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” COMPLETE BOOKING (DELIVERED â†’ COMPLETED)
 // Called after payment is confirmed (Phase 9 will call this internally too)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function completeBooking(bookingId: string, userId: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
@@ -971,7 +966,7 @@ export async function completeBooking(bookingId: string, userId: string) {
     // Generate a scratch card reward for the customer
     await generateScratchCard(updated.customerId, updated.id, updated.grandTotal ?? updated.totalFare ?? 0);
 
-    // ── PHASE 9: Commission Settlement ───────────────────────────────────────
+    // â”€â”€ PHASE 9: Commission Settlement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Settle earnings and commissions asynchronously after status update.
     // We use fire-and-forget here so that a settlement error never blocks the
     // driver from marking the trip complete. Any error is logged + monitored.
@@ -996,15 +991,15 @@ export async function completeBooking(bookingId: string, userId: string) {
             // TODO: Push to a dead-letter queue for manual reconciliation
         });
     } else {
-        logger.warn(`[Settlement] Skipped for booking ${bookingId} — no fare amount or driver`);
+        logger.warn(`[Settlement] Skipped for booking ${bookingId} â€” no fare amount or driver`);
     }
 
     return updated;
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — ACCEPT BOOKING (confirms DRIVER_ASSIGNED state, starts trip)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” ACCEPT BOOKING (confirms DRIVER_ASSIGNED state, starts trip)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function driverAcceptBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
@@ -1057,11 +1052,11 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
 
     // Two valid accept scenarios handled atomically:
     //
-    // Flow A — Direct dispatch: dispatch notified multiple drivers via FCM.
+    // Flow A â€” Direct dispatch: dispatch notified multiple drivers via FCM.
     //   Booking is CONFIRMED with driverId=null.
     //   First driver to accept claims it by setting driverId + transitioning to DRIVER_ARRIVING.
     //
-    // Flow B — Fleet assignment: fleet owner pre-assigned this driver.
+    // Flow B â€” Fleet assignment: fleet owner pre-assigned this driver.
     //   Booking is DRIVER_ASSIGNED with driverId=this driver. Driver confirms.
 
     assertTransition(BookingStatus.CONFIRMED, BookingStatus.DRIVER_ARRIVING);
@@ -1105,28 +1100,28 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
         const customer = await prisma.user.findUnique({ where: { id: booking.customerId } });
         if (customer?.fcmToken) {
             await notificationService.sendToDevice(customer.fcmToken, {
-                title: '🚛 Your Driver is On The Way!',
-                body: `Locked & loaded! Your driver accepted the booking. OTP: ${pickupOtp} — share when they arrive. 🔑`,
+                title: 'ðŸš› Your Driver is On The Way!',
+                body: `Locked & loaded! Your driver accepted the booking. OTP: ${pickupOtp} â€” share when they arrive. ðŸ”‘`,
                 data: { type: 'DRIVER_ARRIVING', bookingId, pickupOtp },
             });
         }
         await createNotification(
             booking.customerId,
-            '🚛 Driver Accepted!',
+            'ðŸš› Driver Accepted!',
             `Your driver is on the way. Your pickup OTP is ${pickupOtp}.`,
             NotificationType.BOOKING_STATUS,
             bookingId,
         );
     }
 
-    logger.info(`Driver ${driver.id} accepted booking ${bookingId} — OTP: ${pickupOtp}`);
+    logger.info(`Driver ${driver.id} accepted booking ${bookingId} â€” OTP: ${pickupOtp}`);
     return prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — VERIFY PICKUP OTP (DRIVER_ARRIVING → PICKED_UP)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” VERIFY PICKUP OTP (DRIVER_ARRIVING â†’ PICKED_UP)
 // Driver enters the OTP shown to the customer. On success, trip starts.
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export async function verifyPickupOtp(bookingId: string, userId: string, otp: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
 
@@ -1195,14 +1190,14 @@ export async function verifyPickupOtp(bookingId: string, userId: string, otp: st
     });
     if (customer?.fcmToken) {
         await notificationService.sendToDevice(customer.fcmToken, {
-            title: '📦 Goods Loaded — Rolling!',
-            body: 'Your goods are loaded and the truck is heading to the destination. Sit back! 🛣️',
+            title: 'ðŸ“¦ Goods Loaded â€” Rolling!',
+            body: 'Your goods are loaded and the truck is heading to the destination. Sit back! ðŸ›£ï¸�',
             data: { type: 'GOODS_LOADED', bookingId },
         });
     }
     await createNotification(
         booking.customerId,
-        '📦 Goods Loaded — Rolling!',
+        'ðŸ“¦ Goods Loaded â€” Rolling!',
         'Your goods are loaded. The driver is heading to the destination.',
         NotificationType.BOOKING_STATUS,
         bookingId,
@@ -1212,10 +1207,10 @@ export async function verifyPickupOtp(bookingId: string, userId: string, otp: st
     return updated;
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — SAVE LOCATION HISTORY (called from Socket.IO location event)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” SAVE LOCATION HISTORY (called from Socket.IO location event)
 // Saves a GPS breadcrumb for admin/fleet panel tracking history.
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export async function saveLocationHistory(params: {
     bookingId: string;
     driverId: string;
@@ -1241,13 +1236,13 @@ export async function saveLocationHistory(params: {
         });
     } catch (err) {
         logger.error('[LocationHistory] Failed to save:', err);
-        // Non-fatal — never block the GPS update
+        // Non-fatal â€” never block the GPS update
     }
 }
 
-// ─────────────────────────────────────────────
-// DRIVER — DECLINE BOOKING (unassigns driver, reverts to CONFIRMED for re-dispatch)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DRIVER â€” DECLINE BOOKING (unassigns driver, reverts to CONFIRMED for re-dispatch)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function driverDeclineBooking(bookingId: string, userId: string) {
     const driver = await prisma.driver.findUnique({ where: { userId } });
@@ -1312,18 +1307,18 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
         bookingId,
     );
 
-    // Trigger re-dispatch asynchronously (non-blocking — runs after response is sent)
+    // Trigger re-dispatch asynchronously (non-blocking â€” runs after response is sent)
     handleDriverDecline(bookingId).catch(err =>
         logger.error(`[Booking] Re-dispatch trigger failed for ${bookingId}:`, err)
     );
 
-    logger.info(`Driver ${driver.id} declined booking ${bookingId} — re-dispatching`);
-    return { success: true, message: 'Booking declined — finding next driver' };
+    logger.info(`Driver ${driver.id} declined booking ${bookingId} â€” re-dispatching`);
+    return { success: true, message: 'Booking declined â€” finding next driver' };
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // ENTERPRISE LIVE BIDDING
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function createBid(bookingId: string, driverUserId: string, data: any) {
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
