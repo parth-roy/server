@@ -155,8 +155,8 @@ CREATE INDEX "bid_awards_status_paymentDeadline_idx" ON "bid_awards"("status", "
 CREATE INDEX "bookings_bookingMode_status_idx" ON "bookings"("bookingMode", "status");
 CREATE INDEX "bookings_awardedFleetOwnerId_status_idx" ON "bookings"("awardedFleetOwnerId", "status");
 
-ALTER TABLE "bookings" ADD CONSTRAINT "bookings_awardedFleetOwnerId_fkey"
-  FOREIGN KEY ("awardedFleetOwnerId") REFERENCES "fleet_owners"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- ALTER TABLE "bookings" ADD CONSTRAINT "bookings_awardedFleetOwnerId_fkey"
+--  FOREIGN KEY ("awardedFleetOwnerId") REFERENCES "fleet_owners"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 ALTER TABLE "bid_windows" ADD CONSTRAINT "bid_windows_bookingId_fkey"
   FOREIGN KEY ("bookingId") REFERENCES "bookings"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -167,8 +167,8 @@ ALTER TABLE "marketplace_bids" ADD CONSTRAINT "marketplace_bids_windowId_fkey"
   FOREIGN KEY ("windowId") REFERENCES "bid_windows"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "marketplace_bids" ADD CONSTRAINT "marketplace_bids_driverId_fkey"
   FOREIGN KEY ("driverId") REFERENCES "drivers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "marketplace_bids" ADD CONSTRAINT "marketplace_bids_fleetOwnerId_fkey"
-  FOREIGN KEY ("fleetOwnerId") REFERENCES "fleet_owners"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+-- ALTER TABLE "marketplace_bids" ADD CONSTRAINT "marketplace_bids_fleetOwnerId_fkey"
+--  FOREIGN KEY ("fleetOwnerId") REFERENCES "fleet_owners"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "marketplace_bids" ADD CONSTRAINT "marketplace_bids_createdByUserId_fkey"
   FOREIGN KEY ("createdByUserId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
