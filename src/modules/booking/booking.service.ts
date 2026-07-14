@@ -248,13 +248,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         throw AppError.internal('Unable to calculate fare. Please try again.');
     }
 
-    // ── FIX HIGH-5: Maximum distance validation ────────────────────────────────
-    if (serverFare.estimatedDistanceKm > 500) {
-        throw AppError.badRequest(
-            'Delivery distance exceeds maximum allowed (500 km)',
-            'DISTANCE_TOO_FAR'
-        );
-    }
+    // ── Maximum distance validation removed for all-India service ──────────────
 
     if (
         data.goodsWeightKg !== undefined &&
@@ -732,7 +726,9 @@ export async function getDriverActiveBooking(userId: string) {
 
 export async function markDriverArriving(bookingId: string, userId: string) {
     const { booking } = await getDriverBooking(bookingId, userId);
-    assertTransition(booking.status, BookingStatus.DRIVER_ARRIVING);
+    if (booking.status !== BookingStatus.DRIVER_ARRIVING) {
+        assertTransition(booking.status, BookingStatus.DRIVER_ARRIVING);
+    }
 
     const updated = await prisma.booking.update({
         where: { id: bookingId },

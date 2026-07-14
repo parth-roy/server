@@ -325,12 +325,7 @@ export const pricingService = {
     // Get pricing config
     const config = await getPricingConfig();
 
-    if (distanceKm > config.max_trip_distance_km) {
-      throw AppError.badRequest(
-        `Maximum trip distance is ${config.max_trip_distance_km} km`,
-        'DISTANCE_TOO_FAR'
-      );
-    }
+    // ── Maximum distance validation removed for all-India service ──────────────
     if (distanceKm < config.min_trip_distance_km) {
       throw AppError.badRequest(
         `Minimum trip distance is ${config.min_trip_distance_km} km`,
@@ -599,9 +594,7 @@ export const pricingService = {
       getPricingConfig(),
     ]);
 
-    if (distanceKm > config.max_trip_distance_km) {
-      throw AppError.badRequest(`Maximum trip distance is ${config.max_trip_distance_km} km`, 'DISTANCE_TOO_FAR');
-    }
+    // ── Maximum distance validation removed for all-India service ──────────────
     if (distanceKm < config.min_trip_distance_km) {
       throw AppError.badRequest(`Minimum trip distance is ${config.min_trip_distance_km} km`, 'DISTANCE_TOO_SHORT');
     }
