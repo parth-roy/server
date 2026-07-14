@@ -141,10 +141,16 @@ export async function settleTripEarnings(input: TripSettlementInput) {
         { bookingId, note: `Cash trip commission — Booking ${bookingId.substring(0, 8)}` }
       );
 
-      // Track running commission debt
+      // Track running commission debt and set/extend 24h deadline
+      const deadline = new Date();
+      deadline.setHours(deadline.getHours() + 24);
+
       await tx.driverWallet.update({
         where: { driverId },
-        data: { commissionDue: { increment: commission } },
+        data: { 
+          commissionDue: { increment: commission },
+          commissionDeadline: deadline 
+        },
       });
 
       logger.info(`[DriverWallet] Cash commission deducted: ₹${commission} from driver ${driverId}. Balance: ${wallet.cachedBalance}`);
@@ -161,9 +167,13 @@ export async function settleTripEarnings(input: TripSettlementInput) {
       const freshWallet = await tx.driverWallet.findUnique({ where: { driverId } });
       if (freshWallet && freshWallet.commissionDue > 0) {
         const offset = Math.min(freshWallet.commissionDue, driverNet);
+        const isFullyPaid = offset === freshWallet.commissionDue;
         await tx.driverWallet.update({
           where: { driverId },
-          data: { commissionDue: { decrement: offset } },
+          data: { 
+            commissionDue: { decrement: offset },
+            ...(isFullyPaid && { commissionDeadline: null })
+          },
         });
         logger.info(`[DriverWallet] Auto-offset ₹${offset} of commission debt for driver ${driverId}`);
       }
@@ -272,9 +282,13 @@ export async function verifyCommissionPayment(
       note: `Commission payment — Razorpay ${razorpay_payment_id}`,
     });
 
+    const isFullyPaid = cleared === wallet.commissionDue;
     const updatedWallet = await tx.driverWallet.update({
       where: { driverId },
-      data: { commissionDue: { decrement: cleared } },
+      data: { 
+        commissionDue: { decrement: cleared },
+        ...(isFullyPaid && { commissionDeadline: null })
+      },
     });
 
     // Re-activate driver if they were blocked
@@ -638,6 +652,16 @@ export async function recordCashCollection(
 ) {
   const { entityType, entityId, amount, bookingId, note } = data;
 
+  if (bookingId) {
+    const existing = await prisma.cashCollectionRecord.findFirst({
+      where: { entityType, entityId, bookingId },
+    });
+    if (existing) {
+      logger.warn(`[CashCollection] Duplicate cash collection attempt for ${entityType} ${entityId} and booking ${bookingId}`);
+      throw new (await import('@shared/errors/AppError')).AppError('Cash collection already recorded for this booking', 409, 'CASH_ALREADY_COLLECTED');
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
     // 1. Record the physical cash receipt
     const record = await tx.cashCollectionRecord.create({
@@ -652,9 +676,13 @@ export async function recordCashCollection(
       );
       // Clear commission due
       const cleared = Math.min(amount, wallet.commissionDue);
+      const isFullyPaid = cleared === wallet.commissionDue;
       await tx.driverWallet.update({
         where: { driverId: entityId },
-        data: { commissionDue: { decrement: cleared } },
+        data: { 
+          commissionDue: { decrement: cleared },
+          ...(isFullyPaid && { commissionDeadline: null })
+        },
       });
 
       // Re-activate driver if their balance is now >= 0
@@ -734,25 +762,33 @@ export async function auditCommissionDebts(notifyService: (driverId: string, mes
     include: { driver: true },
   });
 
+  const now = new Date();
+
   for (const wallet of debtedWallets) {
     const balance = wallet.cachedBalance;
+    const deadline = wallet.commissionDeadline;
+    
+    const isDeadlinePassed = deadline && deadline <= now;
+    const hoursLeft = deadline ? (deadline.getTime() - now.getTime()) / (1000 * 60 * 60) : Infinity;
 
-    if (balance <= COMMISSION_HARD_BLOCK) {
+    if (balance <= COMMISSION_HARD_BLOCK || isDeadlinePassed) {
       // Hard block: set BREAK status
       await prisma.driver.update({
         where: { id: wallet.driverId },
         data: { status: 'BREAK' },
       });
+      const reason = isDeadlinePassed ? 'your 24-hour settlement window expired' : `₹${wallet.commissionDue.toFixed(2)} outstanding commission`;
       await notifyService(
         wallet.driverId,
-        `Your account has been paused due to ₹${wallet.commissionDue.toFixed(2)} outstanding commission. Please pay or visit our office to resume.`
+        `Your account has been paused because ${reason}. Please pay or visit our office to resume.`
       );
-      logger.warn(`[CommissionAudit] Driver ${wallet.driverId} BLOCKED — commission debt: ₹${wallet.commissionDue}`);
-    } else if (balance <= COMMISSION_SOFT_ALERT) {
+      logger.warn(`[CommissionAudit] Driver ${wallet.driverId} BLOCKED — reason: ${reason}`);
+    } else if (balance <= COMMISSION_SOFT_ALERT || hoursLeft <= 4) {
       // Soft alert: notify only
+      const timeAlert = hoursLeft <= 4 ? ` You have ${Math.ceil(hoursLeft)} hours left to settle.` : '';
       await notifyService(
         wallet.driverId,
-        `Reminder: You have ₹${wallet.commissionDue.toFixed(2)} outstanding commission. Pay now via the app to avoid account pause.`
+        `Reminder: You have ₹${wallet.commissionDue.toFixed(2)} outstanding commission.${timeAlert} Pay now via the app to avoid account pause.`
       );
     }
   }

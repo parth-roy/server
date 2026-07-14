@@ -11,6 +11,7 @@ export const QUEUES = {
   DISPATCH: 'dispatch',
   ETA_RECALC: 'eta-recalc',        // Live ETA recalculation for active trips
   ULIP_VERIFICATION: 'ulip-verification', // Background ULIP gov-API verification jobs
+  ANNOUNCEMENT: 'announcement',
 } as const;
 
 export function createQueue(name: string): Queue {
@@ -48,3 +49,4 @@ export const invoiceQueue          = createQueue(QUEUES.INVOICE);
 export const dispatchQueue         = createQueue(QUEUES.DISPATCH);
 export const etaRecalcQueue        = createQueue(QUEUES.ETA_RECALC);
 export const ulipVerificationQueue = createQueue(QUEUES.ULIP_VERIFICATION);
+export const announcementQueue     = createQueue(QUEUES.ANNOUNCEMENT);

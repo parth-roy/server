@@ -233,7 +233,7 @@ export async function updateLocation(userId: string, input: UpdateLocationInput)
     WORKER_LOCATION_KEY(worker.id),
     WORKER_LOCATION_TTL,
     JSON.stringify({ lat: input.lat, lng: input.lng, updatedAt: now.getTime() }),
-  ).catch(err => logger.error('[Workforce] Redis location cache failed:', err));
+  ).catch((err: any) => logger.error('[Workforce] Redis location cache failed:', err));
 
   // Snapshot to DB every 30s (rate-limited via Redis NX key)
   const snapshotKey = `worker:db_snapshot:${worker.id}`;
@@ -242,14 +242,14 @@ export async function updateLocation(userId: string, input: UpdateLocationInput)
       prisma.worker.update({
         where: { id: worker.id },
         data: { currentLat: input.lat, currentLng: input.lng, lastLocationAt: now },
-      }).catch(err => logger.error('[Workforce] DB location snapshot failed:', err));
+      }).catch((err: any) => logger.error('[Workforce] DB location snapshot failed:', err));
     }
   }).catch(() => {
     // Redis down — always write to DB
     prisma.worker.update({
       where: { id: worker.id },
       data: { currentLat: input.lat, currentLng: input.lng, lastLocationAt: now },
-    }).catch(err => logger.error('[Workforce] DB location fallback write failed:', err));
+    }).catch((err: any) => logger.error('[Workforce] DB location fallback write failed:', err));
   });
 }
 // ─────────────────────────────────────────────
@@ -661,7 +661,7 @@ export async function acceptJob(userId: string, bookingId: string) {
       title: '✅ Job Confirmed!',
       body: `You have accepted the job. Head to the pickup location. Payout: ₹${assignment.payoutAmount}`,
       data: { type: 'JOB_ACCEPTED', assignmentId: assignment.id },
-    }).catch(err => logger.error('[Workforce] FCM accept notification failed:', err));
+    }).catch((err: any) => logger.error('[Workforce] FCM accept notification failed:', err));
   }
 
   return { accepted: true, assignment, allSlotsFilled: newAcceptedCount >= totalSlots };
@@ -781,7 +781,7 @@ export async function requestCompletionOtp(userId: string, assignmentId: string)
 
   // Generate 4-digit OTP
   const otp = String(crypto.randomInt(1000, 9999));
-  const otpExpiresAt = new Date(Date.now() + COMPLETION_OTP_TTL_SECONDS * 1000);
+  const otpExpiresAt = new Date(Date.now() + 300 * 1000); // 5 mins
 
   await prisma.jobAssignment.update({
     where: { id: assignmentId },
@@ -798,7 +798,7 @@ export async function requestCompletionOtp(userId: string, assignmentId: string)
       title: '🏗️ Worker Done — Verify Completion',
       body: `Your worker is done. Verify completion with OTP: ${otp}`,
       data: { type: 'WORKER_COMPLETION_OTP', otp, assignmentId },
-    }).catch(err => logger.error('[Workforce] Completion OTP FCM failed:', err));
+    }).catch((err: any) => logger.error('[Workforce] Completion OTP FCM failed:', err));
   }
   await createNotification(
     customer!.id,
@@ -861,10 +861,26 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   const workerRecord = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   if (!workerRecord) throw AppError.notFound('Worker record not found');
 
+  const WORKFORCE_COMMISSION_RATE = Number(process.env.WORKFORCE_COMMISSION_RATE ?? 0.15); // 15% platform cut
+  const commission = Math.round(assignment.payoutAmount * WORKFORCE_COMMISSION_RATE * 100) / 100;
+  const workerNet = assignment.payoutAmount - commission;
+
+  const deadline = new Date();
+  deadline.setHours(deadline.getHours() + 24);
+
   const workerWallet = await prisma.workerWallet.upsert({
     where: { workerId: workerRecord.id },
-    create: { workerId: workerRecord.id, cachedBalance: assignment.payoutAmount },
-    update: { cachedBalance: { increment: assignment.payoutAmount } },
+    create: { 
+      workerId: workerRecord.id, 
+      cachedBalance: workerNet,
+      commissionDue: commission,
+      commissionDeadline: deadline 
+    },
+    update: { 
+      cachedBalance: { increment: workerNet },
+      commissionDue: { increment: commission },
+      commissionDeadline: deadline
+    },
   });
   const freshWorkerWallet = await prisma.workerWallet.findUnique({ where: { workerId: workerRecord.id } });
 
@@ -873,7 +889,7 @@ export async function completeJob(userId: string, assignmentId: string, input: C
       walletId: workerWallet.id,
       type: WalletTransactionType.CREDIT,
       reason: 'JOB_EARNING' as any,
-      amount: assignment.payoutAmount,
+      amount: workerNet,
       balanceAfter: freshWorkerWallet!.cachedBalance,
       bookingId: assignment.bookingId,
       referenceId: assignmentId,
@@ -886,14 +902,14 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   if (user?.fcmToken) {
     notificationService.sendToDevice(user.fcmToken, {
       title: '💰 Job Completed!',
-      body: `₹${assignment.payoutAmount} has been credited to your wallet.`,
-      data: { type: 'JOB_COMPLETED', assignmentId, payout: String(assignment.payoutAmount) },
-    }).catch(err => logger.error('[Workforce] Completion FCM failed:', err));
+      body: `₹${workerNet} has been credited to your wallet.`,
+      data: { type: 'JOB_COMPLETED', assignmentId, payout: String(workerNet) },
+    }).catch((err: any) => logger.error('[Workforce] Completion FCM failed:', err));
   }
   await createNotification(
     userId,
     '💰 Job Completed!',
-    `₹${assignment.payoutAmount} has been credited to your wallet.`,
+    `₹${workerNet} has been credited to your wallet.`,
     NotificationType.PAYMENT,
     assignment.bookingId,
   );
@@ -915,8 +931,8 @@ export async function completeJob(userId: string, assignmentId: string, input: C
     logger.info(`[Workforce] All workers completed for booking ${assignment.bookingId}`);
   }
 
-  logger.info(`[Workforce] Worker ${worker.id} completed job ${assignmentId}. Payout: ₹${assignment.payoutAmount}`);
-  return { completed: true, payoutAmount: assignment.payoutAmount };
+  logger.info(`[Workforce] Worker ${worker.id} completed job ${assignmentId}. Payout: ₹${workerNet} (Commission: ₹${commission})`);
+  return { completed: true, payoutAmount: workerNet, commission };
 }
 
 // ─────────────────────────────────────────────

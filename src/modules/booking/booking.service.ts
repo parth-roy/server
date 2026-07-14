@@ -981,6 +981,16 @@ export async function completeBooking(bookingId: string, userId: string) {
     const grandTotal = booking.grandTotal ?? booking.totalFare ?? 0;
     const paymentMethod = booking.paymentMethod ?? PaymentMethod.CASH;
 
+    if (paymentMethod === PaymentMethod.CASH) {
+        await prisma.booking.update({
+            where: { id: bookingId },
+            data: {
+                paymentStatus: 'PAID',
+                paymentRef: `CASH_COLLECTED_${Date.now()}`,
+            },
+        });
+    }
+
     if (grandTotal > 0 && driver) {
         // Find if this is a fleet booking
         const fleetMembership = await prisma.fleetDriver.findFirst({

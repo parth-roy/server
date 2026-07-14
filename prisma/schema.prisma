@@ -1487,13 +1487,14 @@ model FleetTruckUsage {
 // before driver clears the debt. This is intentional (Uber float model).
 
 model DriverWallet {
-  id            String   @id @default(uuid())
-  driverId      String   @unique
-  driver        Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  cachedBalance Float    @default(0) // Running balance; can be negative
-  commissionDue Float    @default(0) // Total unpaid cash-trip commission
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  driverId           String    @unique
+  driver             Driver    @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  cachedBalance      Float     @default(0) // Running balance; can be negative
+  commissionDue      Float     @default(0) // Total unpaid cash-trip commission
+  commissionDeadline DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   transactions DriverWalletTransaction[]
 
@@ -1524,13 +1525,14 @@ model DriverWalletTransaction {
 // ─────────────────────────────────────────────
 
 model WorkerWallet {
-  id            String   @id @default(uuid())
-  workerId      String   @unique
-  worker        Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
-  cachedBalance Float    @default(0)
-  commissionDue Float    @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  workerId           String    @unique
+  worker             Worker    @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  cachedBalance      Float     @default(0)
+  commissionDue      Float     @default(0)
+  commissionDeadline DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   transactions WorkerWalletTransaction[]
 

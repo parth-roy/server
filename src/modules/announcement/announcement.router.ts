@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import * as AnnouncementController from './announcement.controller';
+import { authenticate } from '@shared/middleware/auth.middleware';
 
 export const announcementRouter = Router();
 
-// Publicly available (or can add auth if needed)
-announcementRouter.get('/', AnnouncementController.getAnnouncements);
+// Now requires auth to know user role
+announcementRouter.get('/', authenticate, AnnouncementController.getAnnouncements);

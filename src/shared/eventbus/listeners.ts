@@ -7,6 +7,7 @@ import { prisma } from '@shared/db/prisma';
 import { NotificationType } from '@prisma/client';
 import { logger } from '@shared/logger';
 import { publishBidOpportunity } from '@modules/marketplace/marketplace.service';
+import { announcementQueue } from '@shared/queue';
 
 // ─── Punchy re-engagement messages (Zomato/Porter style) ───────────────────
 export const PROMO_MESSAGES = [
@@ -200,14 +201,30 @@ export function registerEventListeners(): void {
     });
 
     // ─── 11. ANNOUNCEMENT BROADCAST ──────────────────────────────────────────
-    eventBus.on('announcement.created', async ({ title, body }: { title: string; body: string }) => {
+    eventBus.on('announcement.created', async ({ target, title, body }: { target: string; title: string; body: string }) => {
         try {
-            await notificationService.sendToTopic('all_users', {
+            // Map target audience to firebase push topics
+            // Values: ALL_USERS, CUSTOMER, DRIVER, FLEET_OWNER, WORKFORCE
+            let topic = 'all_users';
+            if (target === 'CUSTOMER') topic = 'topic_customers';
+            else if (target === 'DRIVER') topic = 'topic_drivers';
+            else if (target === 'FLEET_OWNER') topic = 'topic_fleet_owners';
+            else if (target === 'WORKFORCE') topic = 'topic_workforce';
+
+            await notificationService.sendToTopic(topic, {
                 title: `📢 ${title}`,
                 body,
                 data: { type: 'ANNOUNCEMENT', screen: '/notification-center' },
             });
-            logger.info(`[EventBus] Announcement broadcast sent: "${title}"`);
+            logger.info(`[EventBus] Announcement broadcast sent: "${title}" to topic: ${topic}`);
+
+            // Delegate in-app notification insertion to background worker
+            await announcementQueue.add('create-inapp-notifications', {
+                target,
+                title,
+                body,
+            });
+            logger.info(`[EventBus] Dispatched in-app notifications job to BullMQ for target: ${target}`);
         } catch (err) {
             logger.error('[EventBus] announcement.created handler failed:', err);
         }

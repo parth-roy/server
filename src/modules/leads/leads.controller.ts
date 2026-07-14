@@ -22,9 +22,11 @@ export const createWorkforceLead = async (req: Request, res: Response, next: Nex
 
 export const getWorkforceLeads = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { status, page = 1, limit = 50 } = req.query as any;
+    const status = req.query.status as any;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 50;
     
-    const where = status ? { status } : {};
+    const where: any = status ? { status } : {};
     
     const [leads, total] = await Promise.all([
       prisma.workforceLead.findMany({

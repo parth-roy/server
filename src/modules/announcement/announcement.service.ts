@@ -1,8 +1,15 @@
 import { prisma } from '@shared/db/prisma';
 import { eventBus } from '@shared/eventbus';
 
-export async function getActiveAnnouncements() {
+export async function getActiveAnnouncements(role?: string) {
     const now = new Date();
+    
+    // Build target conditions based on user role
+    const targetConditions: any[] = [{ target: 'ALL_USERS' }, { target: 'ALL' }];
+    if (role) {
+        targetConditions.push({ target: role });
+    }
+
     return prisma.announcement.findMany({
         where: {
             isActive: true,
@@ -16,6 +23,9 @@ export async function getActiveAnnouncements() {
                         { endsAt: null },
                         { endsAt: { gte: now } }
                     ]
+                },
+                {
+                    OR: targetConditions
                 }
             ]
         },
@@ -34,7 +44,11 @@ export async function createAnnouncement(data: {
     const announcement = await prisma.announcement.create({ data: { ...data, isActive: true } });
 
     // Broadcast push to all users via FCM topic
-    eventBus.emit('announcement.created', { title: data.title, body: data.body });
+    eventBus.emit('announcement.created', { 
+        target: announcement.target, 
+        title: announcement.title, 
+        body: announcement.body 
+    });
 
     return announcement;
 }

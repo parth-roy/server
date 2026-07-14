@@ -1,4 +1,5 @@
 import { prisma } from '@shared/db/prisma';
+import { eventBus } from '@shared/eventbus';
 import argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
@@ -944,13 +945,22 @@ export async function getAnnouncements() {
 }
 
 export async function createAnnouncement(data: AnnouncementInput) {
-  return prisma.announcement.create({
+  const announcement = await prisma.announcement.create({
     data: {
       ...data,
       startsAt: data.startsAt ? new Date(data.startsAt) : null,
       endsAt:   data.endsAt   ? new Date(data.endsAt)   : null,
     },
   });
+
+  // Emit event to trigger push notifications and background worker
+  eventBus.emit('announcement.created', {
+    target: announcement.target,
+    title: announcement.title,
+    body: announcement.body,
+  });
+
+  return announcement;
 }
 
 export async function updateAnnouncement(id: string, data: Partial<AnnouncementInput>) {

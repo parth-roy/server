@@ -19,7 +19,7 @@ export interface AppEvents {
   'rewards.coins_earned': { userId: string; coins: number; bookingId: string };
   'rewards.scratch_card_ready': { userId: string };
   // Announcements
-  'announcement.created': { title: string; body: string };
+  'announcement.created': { target: string; title: string; body: string };
 }
 
 class TypedEventBus extends EventEmitter2 {
