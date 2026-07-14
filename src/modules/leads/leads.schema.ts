@@ -15,6 +15,6 @@ export const UpdateWorkforceLeadStatusSchema = z.object({
 
 export const GetLeadsQuerySchema = z.object({
   status: z.nativeEnum(LeadStatus).optional(),
-  page: z.string().regex(/^\d+$/).optional().transform(Number),
-  limit: z.string().regex(/^\d+$/).optional().transform(Number)
+  page: z.string().regex(/^\d+$/).optional().transform(v => v ? Number(v) : undefined),
+  limit: z.string().regex(/^\d+$/).optional().transform(v => v ? Number(v) : undefined)
 });

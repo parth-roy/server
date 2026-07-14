@@ -847,6 +847,13 @@ export async function requestPodOtp(
         });
     }
 
+    // Emit over socket so Customer App can show it in UI immediately
+    socketService.emitToRoom('customer', booking.customerId, 'delivery_otp_requested', {
+        bookingId,
+        stopId,
+        otp
+    });
+
     return { success: true, message: 'OTP sent to customer' };
 }
 
