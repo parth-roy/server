@@ -848,7 +848,8 @@ export async function requestPodOtp(
     }
 
     // Emit over socket so Customer App can show it in UI immediately
-    socketService.emitToRoom('customer', booking.customerId, 'delivery_otp_requested', {
+    const { emitToBookingRoom } = await import('@shared/socket/socket.instance');
+    emitToBookingRoom(bookingId, 'delivery_otp_requested', {
         bookingId,
         stopId,
         otp
