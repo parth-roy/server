@@ -90,6 +90,7 @@ const bookingDetailSelect = {
     gstBusinessName: true,
     estimatedDistance: true,
     estimatedDuration: true,
+    arrivalTime: true,
     baseFare: true,
     distanceFare: true,
     timeFare: true,

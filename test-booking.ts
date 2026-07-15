@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function main() { const b = await prisma.booking.findUnique({ where: { id: '6031b954-11a8-437c-a9ec-4c441e88af27' }, include: { stops: true } }); console.log(JSON.stringify(b, null, 2)); } main().finally(() => prisma.$disconnect());
