@@ -1078,3 +1078,66 @@ export async function getSystemHealth() {
     nodeEnv: env.NODE_ENV,
   };
 }
+
+// ─────────────────────────────────────────────
+// WORKFORCE VERIFICATION
+// ─────────────────────────────────────────────
+
+export async function getPendingWorkerDocumentsCount() {
+  const count = await prisma.worker.count({
+    where: {
+      isDocVerified: false,
+      documents: {
+        some: { status: 'PENDING' },
+      },
+    },
+  });
+  return { count };
+}
+
+export async function getPendingWorkerDocuments() {
+  const pendingWorkers = await prisma.worker.findMany({
+    where: {
+      isDocVerified: false,
+      documents: {
+        some: { status: 'PENDING' },
+      },
+    },
+    include: {
+      user: { select: { name: true, phone: true } },
+      documents: true,
+    },
+  });
+  return pendingWorkers;
+}
+
+export async function verifyWorkerDocuments(workerId: string, input: any) {
+  const worker = await prisma.worker.findUnique({ where: { id: workerId } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  if (input.approve) {
+    // Update worker status and insert extracted data
+    await prisma.worker.update({
+      where: { id: workerId },
+      data: {
+        isDocVerified: true,
+        aadhaarNumber: input.aadhaarNumber,
+        panNumber: input.panNumber,
+      },
+    });
+
+    // Mark documents as verified
+    await prisma.workerDocument.updateMany({
+      where: { workerId },
+      data: { status: 'VERIFIED', verifiedAt: new Date() },
+    });
+  } else {
+    // Reject documents
+    await prisma.workerDocument.updateMany({
+      where: { workerId, status: 'PENDING' },
+      data: { status: 'REJECTED', rejectedReason: input.rejectReason },
+    });
+  }
+
+  return { success: true };
+}

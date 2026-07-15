@@ -52,8 +52,12 @@ export const UpdatePreferencesSchema = z.object({
 });
 
 export const UploadDocumentsSchema = z.object({
-  aadhaarUrl: z.string().url().optional(),
-  panUrl: z.string().url().optional(),
+  aadhaarUrl: z.string().url(),
+  panUrl: z.string().url(),
+  bikeUrl: z.string().url().optional(),
+  licenseUrl: z.string().url().optional(),
+  rcUrl: z.string().url().optional(),
+  selfieUrl: z.string().url(),
 });
 
 // ─────────────────────────────────────────────

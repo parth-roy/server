@@ -316,14 +316,21 @@ export async function uploadDocuments(userId: string, input: UploadDocumentsInpu
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   if (!worker) throw AppError.notFound('Worker not found');
 
-  const updated = await prisma.worker.update({
-    where: { userId },
-    data: {
-      ...(input.aadhaarUrl && { aadhaarUrl: input.aadhaarUrl }),
-      ...(input.panUrl && { panUrl: input.panUrl }),
-    },
-  });
-  return updated;
+  const docsToCreate: any[] = [];
+  if (input.aadhaarUrl) docsToCreate.push({ workerId: worker.id, type: 'AADHAAR', fileUrl: input.aadhaarUrl });
+  if (input.panUrl) docsToCreate.push({ workerId: worker.id, type: 'PAN', fileUrl: input.panUrl });
+  if (input.bikeUrl) docsToCreate.push({ workerId: worker.id, type: 'BIKE', fileUrl: input.bikeUrl });
+  if (input.licenseUrl) docsToCreate.push({ workerId: worker.id, type: 'LICENSE', fileUrl: input.licenseUrl });
+  if (input.rcUrl) docsToCreate.push({ workerId: worker.id, type: 'RC', fileUrl: input.rcUrl });
+  if (input.selfieUrl) docsToCreate.push({ workerId: worker.id, type: 'SELFIE', fileUrl: input.selfieUrl });
+
+  if (docsToCreate.length > 0) {
+    await prisma.workerDocument.createMany({
+      data: docsToCreate,
+    });
+  }
+
+  return { success: true, message: 'Documents uploaded successfully for verification.' };
 }
 
 // ─────────────────────────────────────────────

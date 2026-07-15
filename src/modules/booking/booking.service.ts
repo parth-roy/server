@@ -372,8 +372,21 @@ export async function listBookings(userId: string, role: string, query: ListBook
         prisma.booking.count({ where }),
     ]);
 
+    const auditLogs = await prisma.pricingAuditLog.findMany({
+        where: { bookingId: { in: bookings.map(b => b.id) } },
+        orderBy: { calculatedAt: 'desc' },
+    });
+
+    const enrichedBookings = bookings.map(b => {
+        const log = auditLogs.find(a => a.bookingId === b.id);
+        return {
+            ...b,
+            driverPayout: log?.driverPayout ?? null,
+        };
+    });
+
     return {
-        bookings,
+        bookings: enrichedBookings,
         meta: {
             total,
             page,
@@ -429,7 +442,15 @@ export async function getBooking(bookingId: string, userId: string, role: string
         throw AppError.forbidden('You do not have access to this booking');
     }
 
-    return booking;
+    const auditLog = await prisma.pricingAuditLog.findFirst({
+        where: { bookingId: booking.id },
+        orderBy: { calculatedAt: 'desc' },
+    });
+
+    return {
+        ...booking,
+        driverPayout: auditLog?.driverPayout ?? null,
+    };
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

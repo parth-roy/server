@@ -441,15 +441,16 @@ model Driver {
 // ─────────────────────────────────────────────
 
 model Worker {
-  id             String       @id @default(uuid())
-  userId         String       @unique
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  isActive       Boolean      @default(true)
-  isDocVerified  Boolean      @default(false) // true = admin approved both Aadhaar + PAN
-  status         WorkerStatus @default(OFFLINE)
-  rating         Float        @default(5.0)
-  totalJobs      Int          @default(0)
-  acceptanceRate Float        @default(100.0) // Percentage 0-100; recalculated on each accept/decline
+  id             String           @id @default(uuid())
+  userId         String           @unique
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isActive       Boolean          @default(true)
+  isDocVerified  Boolean          @default(false) // true = admin approved both Aadhaar + PAN
+  status         WorkerStatus     @default(OFFLINE)
+  documents      WorkerDocument[]
+  rating         Float            @default(5.0)
+  totalJobs      Int              @default(0)
+  acceptanceRate Float            @default(100.0) // Percentage 0-100; recalculated on each accept/decline
   currentLat     Float?
   currentLng     Float?
   lastLocationAt DateTime?
@@ -505,6 +506,20 @@ model Worker {
   @@index([status])
   @@index([status, isDocVerified, isActive])
   @@map("workers")
+}
+
+model WorkerDocument {
+  id             String         @id @default(uuid())
+  workerId       String
+  worker         Worker         @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  type           String // e.g., AADHAAR, PAN, BIKE_PHOTO, LICENSE, RC, SELFIE
+  fileUrl        String
+  status         DocumentStatus @default(PENDING)
+  rejectedReason String?
+  verifiedAt     DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@map("worker_documents")
 }
 
 model Badge {

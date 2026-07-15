@@ -453,3 +453,19 @@ export const getUlipLog = async (req: Request, res: Response, next: NextFunction
 export const systemHealth = async (_req: Request, res: Response, next: NextFunction) => {
   try { ok(res, await adminService.getSystemHealth()); } catch (e) { next(e); }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WORKFORCE VERIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getPendingWorkerDocumentsCount = async (_req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.getPendingWorkerDocumentsCount()); } catch (e) { next(e); }
+};
+
+export const getPendingWorkerDocuments = async (_req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.getPendingWorkerDocuments()); } catch (e) { next(e); }
+};
+
+export const verifyWorkerDocuments = async (req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.verifyWorkerDocuments(req.params.workerId, req.body)); } catch (e) { next(e); }
+};

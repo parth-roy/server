@@ -143,3 +143,9 @@ adminRouter.post('/training/courses', (req, res) => trainingAdminController.crea
 adminRouter.patch('/training/courses/:id', (req, res) => trainingAdminController.updateCourse(req, res));
 adminRouter.delete('/training/courses/:id', (req, res) => trainingAdminController.deleteCourse(req, res));
 adminRouter.get('/training/stats', (req, res) => trainingAdminController.getStats(req, res));
+
+//  Workforce Verification 
+import { VerifyWorkerDocumentSchema } from './admin.schema';
+adminRouter.get('/worker-documents/pending-count', adminController.getPendingWorkerDocumentsCount);
+adminRouter.get('/worker-documents/pending', adminController.getPendingWorkerDocuments);
+adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), adminController.verifyWorkerDocuments);
