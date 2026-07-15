@@ -1,4 +1,4 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient, UserRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -12,7 +12,7 @@ async function main() {
       data: {
         phone,
         name: 'PlayStore Tester',
-        role: 'WORKFORCE',
+        role: UserRole.WORKER,
         profileComplete: true,
       }
     });
