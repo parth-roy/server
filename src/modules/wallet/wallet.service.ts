@@ -275,7 +275,7 @@ export async function createTopUpOrder(userId: string, amount: number) {
     const order = await razorpay.orders.create({
         amount: amountInPaise,
         currency: 'INR',
-        receipt: `WALLET_${userId}_${Date.now()}`,
+        receipt: `W_${userId.slice(0, 8)}_${Date.now()}`,
     });
 
     return {
