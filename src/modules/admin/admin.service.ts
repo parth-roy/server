@@ -287,11 +287,19 @@ export async function getBookingById(id: string) {
       locationHistory: { orderBy: { recordedAt: 'desc' }, take: 100 },
       earning: true,
       fleetEarning: true,
-      pricingAuditLog: { orderBy: { createdAt: 'desc' }, take: 1 },
     },
   });
   if (!booking) throw AppError.notFound('Booking not found');
-  return booking;
+
+  const pricingLog = await prisma.pricingAuditLog.findFirst({
+    where: { bookingId: booking.id },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return {
+    ...booking,
+    pricingAuditLog: pricingLog ? [pricingLog] : []
+  };
 }
 
 export async function adminAssignDriver(bookingId: string, input: AssignDriverInput) {
