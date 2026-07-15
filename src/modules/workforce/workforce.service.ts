@@ -417,99 +417,81 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   }
   const skip = (page - 1) * limit;
 
-  // Build laborType filter
-  let laborTypeFilter: any = {};
+  // Build gigType filter based on preferredTypes if laborType isn't provided
+  let gigTypeFilter: any = {};
   if (laborType) {
-    laborTypeFilter = { laborType: { in: [laborType as LaborType, LaborType.BOTH] } };
-  } else if (worker.preferredTypes.length > 0 && !worker.preferredTypes.includes(LaborType.BOTH)) {
-    laborTypeFilter = { laborType: { in: [...worker.preferredTypes, LaborType.BOTH] } };
+    gigTypeFilter = { gigType: laborType };
+  } else if (worker.preferredTypes.length > 0) {
+    // Optional: could filter by worker.preferredTypes if gigType matches
   }
 
-  // Fetch from DB — extra headroom because we filter open slots in memory
-  const bookings = await prisma.booking.findMany({
+  // Fetch GigJobs instead of Bookings
+  const gigs = await prisma.gigJob.findMany({
     where: {
-      laborRequired: true,
-      ...laborTypeFilter,
-      status: {
-        in: ['CONFIRMED', 'DRIVER_ARRIVING', 'PICKED_UP'] as any[],
-      },
-      jobAssignments: { none: { workerId: worker.id } }, // Exclude jobs already responded to
+      ...gigTypeFilter,
+      status: 'PENDING',
+      assignments: { none: { workerId: worker.id } }, // Exclude jobs already responded to
     },
     select: {
       id: true,
-      bookingNumber: true,
-      pickupLat: true,
-      pickupLng: true,
-      pickupAddress: true,
-      laborType: true,
-      laborersCount: true,
-      laborCharge: true,
-      vehicleType: true,
-      goodsType: true,
-      goodsDescription: true,
-      goodsWeightKg: true,
-      goodsQuantity: true,
-      goodsLengthCm: true,
-      goodsWidthCm: true,
-      goodsHeightCm: true,
-      handlingInstructions: true,
-      goodsImageUrls: true,
-      estimatedDuration: true,
+      jobNumber: true,
+      locationLat: true,
+      locationLng: true,
+      locationAddress: true,
+      gigType: true,
+      workersNeeded: true,
+      totalFare: true,
+      description: true,
       createdAt: true,
-      stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true } },
-      jobAssignments: {
+      assignments: {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
         select: { id: true, workerId: true },
       },
     },
     skip,
-    take: limit * 3, // Extra headroom to account for in-memory slot filtering
+    take: limit * 3, // Extra headroom
     orderBy: { createdAt: 'desc' },
   });
 
-  // In-memory: filter open slots, exclude self, compute distance
-  let openBookings = bookings
-    .filter(b => {
-      const acceptedCount = b.jobAssignments.length;
-      const totalSlots = b.laborersCount ?? 1;
-      const estimatedUnitWeight = b.goodsWeightKg != null
-        ? b.goodsWeightKg / Math.max(b.goodsQuantity, 1)
-        : null;
-      const withinWorkerCapacity = estimatedUnitWeight == null || estimatedUnitWeight <= worker.maxWeightKg;
-      return acceptedCount < totalSlots && withinWorkerCapacity;
+  // Map GigJobs to the JobFeedItem structure expected by the Flutter app
+  let openBookings = gigs
+    .filter(g => {
+      const acceptedCount = g.assignments.length;
+      const totalSlots = g.workersNeeded ?? 1;
+      return acceptedCount < totalSlots;
     })
-    .map(b => {
+    .map(g => {
       const distanceKm =
         worker.currentLat != null && worker.currentLng != null
-          ? Math.round(haversineKm(worker.currentLat, worker.currentLng, b.pickupLat, b.pickupLng) * 10) / 10
+          ? Math.round(haversineKm(worker.currentLat, worker.currentLng, g.locationLat, g.locationLng) * 10) / 10
           : null;
-      const acceptedCount = b.jobAssignments.length;
-      const totalSlots = b.laborersCount ?? 1;
+      const acceptedCount = g.assignments.length;
+      const totalSlots = g.workersNeeded ?? 1;
 
       return {
-        id:             b.id,
-        bookingNumber:  b.bookingNumber,
-        pickupLat:      b.pickupLat,
-        pickupLng:      b.pickupLng,
-        pickupAddress:  b.pickupAddress,
-        dropAddress:    b.stops[0]?.address ?? 'Destination',
-        laborType:      b.laborType,
-        payoutAmount:   (b.laborCharge ?? 0) / totalSlots,
+        id:             g.id,
+        bookingNumber:  g.jobNumber,
+        pickupLat:      g.locationLat,
+        pickupLng:      g.locationLng,
+        pickupAddress:  g.locationAddress,
+        dropAddress:    'N/A', // Gigs usually don't have a dropoff
+        laborType:      g.gigType,
+        payoutAmount:   (g.totalFare ?? 0) / totalSlots,
         slotsRemaining: totalSlots - acceptedCount,
         totalSlots,
-        vehicleType:    b.vehicleType,
-        goodsType:      b.goodsType,
-        goodsDescription: b.goodsDescription,
-        goodsWeightKg:  b.goodsWeightKg,
-        goodsQuantity:  b.goodsQuantity,
-        goodsLengthCm:  b.goodsLengthCm,
-        goodsWidthCm:   b.goodsWidthCm,
-        goodsHeightCm:  b.goodsHeightCm,
-        handlingInstructions: b.handlingInstructions,
-        goodsImageUrls: b.goodsImageUrls,
-        estimatedDuration: b.estimatedDuration,
+        vehicleType:    'Gig',
+        goodsType:      'Service',
+        goodsDescription: g.description,
+        goodsWeightKg:  null,
+        goodsQuantity:  1,
+        goodsLengthCm:  null,
+        goodsWidthCm:   null,
+        goodsHeightCm:  null,
+        handlingInstructions: null,
+        goodsImageUrls: [],
+        estimatedDuration: null,
         distanceKm,
-        createdAt:      b.createdAt,
+        createdAt:      g.createdAt,
       };
     });
 
@@ -517,7 +499,7 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     openBookings = openBookings.filter(b => b.payoutAmount >= minPayout);
   }
 
-  // Apply maxDistance filter after haversine (can't do in DB without PostGIS)
+  // Apply maxDistance filter after haversine
   if (maxDistance != null && worker.currentLat != null) {
     openBookings = openBookings.filter(b => b.distanceKm == null || b.distanceKm <= maxDistance);
   }
@@ -999,27 +981,22 @@ export async function getWalletTransactions(userId: string, page: number, limit:
 export async function getNearbyPins(userId: string, query: JobRadarQuery) {
   const { lat, lng, radiusKm } = query;
   
-  // Find nearby available jobs (similar to getAvailableJobs but mapped for pins)
-  const jobs = await prisma.booking.findMany({
+  // Find nearby available Gig jobs
+  const jobs = await prisma.gigJob.findMany({
     where: {
-      status: 'CONFIRMED',
-      laborRequired: true,
-      jobAssignments: { none: { worker: { userId } } }, // Exclude jobs already offered/assigned to this worker
+      status: 'PENDING',
+      assignments: { none: { worker: { userId } } }, // Exclude jobs already offered/assigned to this worker
     },
     select: {
       id: true,
-      bookingNumber: true,
-      pickupLat: true,
-      pickupLng: true,
-      pickupAddress: true,
-      laborCharge: true,
-      laborType: true,
-      laborersCount: true,
-      vehicleType: true,
-      goodsType: true,
-      goodsWeightKg: true,
-      goodsQuantity: true,
-      jobAssignments: {
+      jobNumber: true,
+      locationLat: true,
+      locationLng: true,
+      locationAddress: true,
+      totalFare: true,
+      gigType: true,
+      workersNeeded: true,
+      assignments: {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
         select: { id: true },
       },
@@ -1028,24 +1005,24 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
 
   const availablePins = jobs
     .filter(job => {
-      const acceptedCount = job.jobAssignments.length;
-      const totalSlots = job.laborersCount ?? 1;
+      const acceptedCount = job.assignments.length;
+      const totalSlots = job.workersNeeded ?? 1;
       return acceptedCount < totalSlots;
     })
     .map(job => ({
       id: job.id,
-      bookingNumber: job.bookingNumber,
-      pickupLat: job.pickupLat,
-      pickupLng: job.pickupLng,
-      pickupAddress: job.pickupAddress,
-      laborCharge: (job.laborCharge ?? 0) / (job.laborersCount ?? 1),
-      laborType: job.laborType,
-      laborersCount: job.laborersCount,
-      vehicleType: job.vehicleType,
-      goodsType: job.goodsType,
-      goodsWeightKg: job.goodsWeightKg,
-      goodsQuantity: job.goodsQuantity,
-      distanceKm: haversineKm(lat, lng, job.pickupLat, job.pickupLng)
+      bookingNumber: job.jobNumber,
+      pickupLat: job.locationLat,
+      pickupLng: job.locationLng,
+      pickupAddress: job.locationAddress,
+      laborCharge: (job.totalFare ?? 0) / (job.workersNeeded ?? 1),
+      laborType: job.gigType,
+      laborersCount: job.workersNeeded,
+      vehicleType: 'Gig',
+      goodsType: 'Service',
+      goodsWeightKg: null,
+      goodsQuantity: 1,
+      distanceKm: haversineKm(lat, lng, job.locationLat, job.locationLng)
     }))
     .filter(job => job.distanceKm <= radiusKm);
 
