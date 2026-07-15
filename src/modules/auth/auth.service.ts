@@ -23,6 +23,7 @@ const DEMO_ACCOUNTS: Record<string, { staticOtp: string; role: string; name: str
   '9000000000': { staticOtp: '123456', role: 'DRIVER',      name: 'GMT Demo Driver' },
   '9000000001': { staticOtp: '123456', role: 'FLEET_OWNER', name: 'GMT Demo Fleet' },
   '9852364101': { staticOtp: '123456', role: 'CUSTOMER',    name: 'GMT Demo Customer' },
+  '9999999999': { staticOtp: '123456', role: 'WORKFORCE',   name: 'PlayStore Tester' },
 };
 
 const isDemoAccount = (phone: string) => phone in DEMO_ACCOUNTS;
