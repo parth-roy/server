@@ -90,7 +90,69 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     },
   });
   if (!driver) throw AppError.notFound('Driver profile not found. Please register first.');
-  return _formatDriverProfile(driver);
+  
+  // --- Compute Dashboard Real-time Metrics ---
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
+  const startOfThisWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const startOfLastWeek = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+  let todayEarnings = 0;
+  let yesterdayEarnings = 0;
+  let weeklyEarnings = 0;
+  let lastWeekEarnings = 0;
+
+  const wallet = await prisma.driverWallet.findUnique({ where: { driverId: driver.id } });
+  if (wallet) {
+    const txns = await prisma.driverWalletTransaction.findMany({
+      where: {
+        walletId: wallet.id,
+        type: 'CREDIT',
+        reason: 'TRIP_EARNING',
+        createdAt: { gte: startOfLastWeek },
+      },
+      select: { amount: true, createdAt: true },
+    });
+
+    for (const tx of txns) {
+      if (tx.createdAt >= startOfThisWeek) {
+        weeklyEarnings += tx.amount;
+      } else {
+        lastWeekEarnings += tx.amount;
+      }
+
+      if (tx.createdAt >= startOfToday) {
+        todayEarnings += tx.amount;
+      } else if (tx.createdAt >= startOfYesterday) {
+        yesterdayEarnings += tx.amount;
+      }
+    }
+  }
+
+  const todayTrips = await prisma.booking.count({
+    where: {
+      driverId: driver.id,
+      status: 'COMPLETED',
+      createdAt: { gte: startOfToday },
+    },
+  });
+
+  const calculateTrend = (current: number, previous: number) => {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    const trend = ((current - previous) / previous) * 100;
+    return Math.min(Math.max(trend, -100), 100); // Cap at -100% and +100%
+  };
+
+  const profile = _formatDriverProfile(driver);
+  return {
+    ...profile,
+    todayEarnings,
+    todayTrips,
+    weeklyEarnings,
+    todayTrend: calculateTrend(todayEarnings, yesterdayEarnings),
+    weeklyTrend: calculateTrend(weeklyEarnings, lastWeekEarnings),
+  };
 }
 
 // ── Vehicle ───────────────────────────────────────────────────────────

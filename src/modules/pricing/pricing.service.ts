@@ -220,9 +220,9 @@ async function writePricingAuditLog(
   req: FareEstimateRequest,
   components: FareComponents,
   source: 'estimate' | 'booking_confirm' | 'admin',
-): Promise<void> {
+): Promise<string | undefined> {
   try {
-    await (prisma as any).pricingAuditLog.create({
+    const auditLog = await (prisma as any).pricingAuditLog.create({
       data: {
         bookingId:        req.bookingId ?? null,
         vehicleType:      req.vehicleType,
@@ -254,9 +254,11 @@ async function writePricingAuditLog(
         distanceSource:   components.distanceSource,
       },
     });
+    return auditLog.id;
   } catch (err) {
     logger.error('[Pricing] Failed to write audit log:', err);
     // Non-fatal — do not block fare estimation
+    return undefined;
   }
 }
 
@@ -420,7 +422,7 @@ export const pricingService = {
     };
 
     // ── [17] Audit log ────────────────────────────────────────────────────
-    await writePricingAuditLog(
+    const auditLogId = await writePricingAuditLog(
       req,
       components,
       req.bookingId ? 'booking_confirm' : 'estimate',
@@ -448,6 +450,7 @@ export const pricingService = {
     const response: FareEstimateResponse = {
       estimatedDistanceKm:      components.distanceKm,
       estimatedDurationMinutes: durationMinutes,
+      auditLogId,
 
       fareBreakdown: {
         baseFare:        components.baseFare,

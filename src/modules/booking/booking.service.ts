@@ -323,12 +323,23 @@ export async function createBooking(customerId: string, data: CreateBookingInput
 
     if (!booking) throw AppError.internal('Failed to generate unique booking number');
 
-    logger.info(`Booking created: ${booking.bookingNumber} by customer ${customerId} (fare: â‚¹${serverFare.totalFare})`);
+    if (serverFare.auditLogId) {
+        try {
+            await prisma.pricingAuditLog.update({
+                where: { id: serverFare.auditLogId },
+                data: { bookingId: booking.id }
+            });
+        } catch (e) {
+            logger.error(`Failed to link PricingAuditLog to booking ${booking.id}: ${e}`);
+        }
+    }
+
+    logger.info(`Booking created: ${booking.bookingNumber} by customer ${customerId} (fare: ₹${serverFare.totalFare})`);
     return booking;
 }
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// CUSTOMER â€” LIST MY BOOKINGS
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ——————————————————————————————————————————————
+// CUSTOMER — LIST MY BOOKINGS
+// ——————————————————————————————————————————————
 
 export async function listBookings(userId: string, role: string, query: ListBookingsQuery) {
     const { page, limit, status } = query;

@@ -82,6 +82,7 @@ export interface VehicleInfo {
 export interface FareEstimateResponse {
   estimatedDistanceKm:      number;
   estimatedDurationMinutes: number;
+  auditLogId?:              string;
 
   fareBreakdown: {
     baseFare:         number;
