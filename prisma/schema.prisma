@@ -301,6 +301,7 @@ model User {
   // Enterprise specific relations
   teamMembers TeamMember[]  @relation("EnterpriseTeamMembers")
   ScratchCard ScratchCard[]
+  GigJob      GigJob[]
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -502,6 +503,7 @@ model Worker {
   workerWallet     WorkerWallet?
   workerBadges     WorkerBadge[]
   trainingProgress WorkerTrainingProgress[]
+  GigAssignment    GigAssignment[]
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -1852,4 +1854,64 @@ model WorkforceLead {
   updatedAt DateTime   @updatedAt
 
   @@map("workforce_leads")
+}
+
+// ── Gig Workforce (Standalone Jobs) ──────────────────────────────────────────────
+
+enum GigJobStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model GigJob {
+  id         String @id @default(uuid())
+  jobNumber  String @unique // e.g. GIG-1001
+  customerId String
+  customer   User   @relation(fields: [customerId], references: [id])
+
+  gigType     String // e.g. "SWEEPER", "ELECTRICIAN" (Managed dynamically by Admin)
+  description String?
+
+  locationLat     Float
+  locationLng     Float
+  locationAddress String
+
+  status        GigJobStatus @default(PENDING)
+  workersNeeded Int          @default(1)
+
+  // Payment fields
+  totalFare       Float
+  paymentStatus   PaymentStatus  @default(PENDING)
+  paymentMethod   PaymentMethod?
+  razorpayOrderId String?
+
+  completionOtp String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments GigAssignment[]
+}
+
+model GigAssignment {
+  id           String          @id @default(uuid())
+  gigId        String
+  gig          GigJob          @relation(fields: [gigId], references: [id], onDelete: Cascade)
+  workerId     String
+  worker       Worker          @relation(fields: [workerId], references: [id])
+  status       WorkerJobStatus @default(PENDING_ACCEPTANCE)
+  payoutAmount Float
+
+  arrivedAt   DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gigId, workerId])
 }
