@@ -293,7 +293,7 @@ export async function getBookingById(id: string) {
 
   const pricingLog = await prisma.pricingAuditLog.findFirst({
     where: { bookingId: booking.id },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { calculatedAt: 'desc' }
   });
 
   return {
