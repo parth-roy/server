@@ -467,5 +467,5 @@ export const getPendingWorkerDocuments = async (_req: Request, res: Response, ne
 };
 
 export const verifyWorkerDocuments = async (req: Request, res: Response, next: NextFunction) => {
-  try { ok(res, await adminService.verifyWorkerDocuments(req.params.workerId, req.body)); } catch (e) { next(e); }
+  try { ok(res, await adminService.verifyWorkerDocuments(req.params.workerId as string, req.body)); } catch (e) { next(e); }
 };

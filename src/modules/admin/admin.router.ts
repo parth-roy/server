@@ -146,6 +146,6 @@ adminRouter.get('/training/stats', (req, res) => trainingAdminController.getStat
 
 //  Workforce Verification 
 import { VerifyWorkerDocumentSchema } from './admin.schema';
-adminRouter.get('/worker-documents/pending-count', adminController.getPendingWorkerDocumentsCount);
-adminRouter.get('/worker-documents/pending', adminController.getPendingWorkerDocuments);
-adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), adminController.verifyWorkerDocuments);
+adminRouter.get('/worker-documents/pending-count', ctrl.getPendingWorkerDocumentsCount);
+adminRouter.get('/worker-documents/pending', ctrl.getPendingWorkerDocuments);
+adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), ctrl.verifyWorkerDocuments);

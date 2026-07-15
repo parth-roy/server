@@ -192,3 +192,11 @@ export type AnnouncementInput     = z.infer<typeof announcementSchema>;
 export type BroadcastInput        = z.infer<typeof broadcastNotificationSchema>;
 export type SubscriptionUpdate    = z.infer<typeof subscriptionUpdateSchema>;
 export type UlipLogsQuery         = z.infer<typeof ulipLogsQuerySchema>;
+
+export const VerifyWorkerDocumentSchema = z.object({
+  approve: z.boolean(),
+  aadhaarNumber: z.string().optional(),
+  panNumber: z.string().optional(),
+  reason: z.string().optional(),
+});
+export type VerifyWorkerDocumentInput = z.infer<typeof VerifyWorkerDocumentSchema>;
