@@ -149,3 +149,4 @@ import { VerifyWorkerDocumentSchema } from './admin.schema';
 adminRouter.get('/worker-documents/pending-count', ctrl.getPendingWorkerDocumentsCount);
 adminRouter.get('/worker-documents/pending', ctrl.getPendingWorkerDocuments);
 adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), ctrl.verifyWorkerDocuments);
+adminRouter.post('/workforce/:workerId/wallet-credit', ctrl.creditWorkerWallet);

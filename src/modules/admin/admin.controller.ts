@@ -176,6 +176,13 @@ export const creditWallet = async (req: Request, res: Response, next: NextFuncti
   } catch (e) { next(e); }
 };
 
+export const creditWorkerWallet = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = walletCreditSchema.parse(req.body);
+    ok(res, await adminService.adminWorkerWalletCredit(p(req.params.workerId), input));
+  } catch (e) { next(e); }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DRIVERS
 // ─────────────────────────────────────────────────────────────────────────────

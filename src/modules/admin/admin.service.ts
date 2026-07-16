@@ -477,6 +477,31 @@ export async function adminWalletCredit(userId: string, input: WalletCreditInput
   return { success: true, credited: input.amount, newBalance };
 }
 
+export async function adminWorkerWalletCredit(workerId: string, input: WalletCreditInput) {
+  let workerWallet = await prisma.workerWallet.findUnique({ where: { workerId } });
+  if (!workerWallet) {
+    workerWallet = await prisma.workerWallet.create({ data: { workerId, cachedBalance: 0, commissionDue: 0 } });
+  }
+
+  const newBalance = workerWallet.cachedBalance + input.amount;
+
+  await prisma.$transaction([
+    prisma.workerWalletTransaction.create({
+      data: {
+        walletId: workerWallet.id,
+        type: WalletTransactionType.CREDIT,
+        reason: 'ADMIN_CREDIT',
+        amount: input.amount,
+        balanceAfter: newBalance,
+        note: input.note,
+      },
+    }),
+    prisma.workerWallet.update({ where: { id: workerWallet.id }, data: { cachedBalance: newBalance } }),
+  ]);
+
+  return { success: true, credited: input.amount, newBalance };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DRIVERS & VERIFICATION
 // ─────────────────────────────────────────────────────────────────────────────
