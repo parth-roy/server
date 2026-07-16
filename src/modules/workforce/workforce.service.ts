@@ -211,6 +211,7 @@ export async function getMe(userId: string) {
     where: { userId },
     include: {
       user: { select: { id: true, name: true, phone: true, profileImageUrl: true, profileComplete: true } },
+      documents: true,
     },
   });
   if (!worker) throw AppError.notFound('Worker profile not found');
