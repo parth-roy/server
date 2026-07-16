@@ -214,7 +214,13 @@ export async function getMe(userId: string) {
     },
   });
   if (!worker) throw AppError.notFound('Worker profile not found');
-  return worker;
+  
+  return {
+    ...worker,
+    aadhaarStatus: worker.isDocVerified ? 'VERIFIED' : worker.aadhaarVerifStatus,
+    panStatus: worker.isDocVerified ? 'VERIFIED' : worker.panVerifStatus,
+    bankVerified: worker.isDocVerified ? true : worker.bankVerified,
+  };
 }
 
 // ─────────────────────────────────────────────
