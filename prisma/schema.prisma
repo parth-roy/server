@@ -1872,21 +1872,29 @@ model GigJob {
   customerId String
   customer   User   @relation(fields: [customerId], references: [id])
 
-  gigType     String // e.g. "SWEEPER", "ELECTRICIAN" (Managed dynamically by Admin)
+  gigType     String // legacy free-text kept for old records
+  gigCategory String @default("HELPER") // GigSkill code: HELPER | LOADER | FURNITURE_MOVER etc.
   description String?
 
   locationLat     Float
   locationLng     Float
   locationAddress String
+  locationZone    String @default("RURAL") // METRO | TIER2 | RURAL (computed at create)
+
+  durationHours Int          @default(2)         // requested work duration
+  urgency       String       @default("SCHEDULED") // IMMEDIATE | WITHIN_HOUR | SCHEDULED
 
   status        GigJobStatus @default(PENDING)
   workersNeeded Int          @default(1)
 
   // Payment fields
-  totalFare       Float
-  paymentStatus   PaymentStatus  @default(PENDING)
-  paymentMethod   PaymentMethod?
-  razorpayOrderId String?
+  totalFare        Float   // grandTotal (customer pays)
+  perWorkerRate    Float   @default(0) // worker earnings per person
+  platformFee      Float   @default(0) // platform revenue
+  fareBreakdown    Json?               // full GigFareBreakdown snapshot
+  paymentStatus    PaymentStatus  @default(PENDING)
+  paymentMethod    PaymentMethod?
+  razorpayOrderId  String?
 
   completionOtp String?
 
@@ -1894,6 +1902,10 @@ model GigJob {
   updatedAt DateTime @updatedAt
 
   assignments GigAssignment[]
+
+  @@index([status])
+  @@index([locationZone, status])
+  @@map("gig_jobs")
 }
 
 model GigAssignment {
@@ -1914,4 +1926,17 @@ model GigAssignment {
   updatedAt DateTime @updatedAt
 
   @@unique([gigId, workerId])
+}
+
+// ── Gig Pricing Config (separate from truck pricing) ─────────────────────────
+
+model GigPricingConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?  // admin userId who last changed this
+
+  @@map("gig_pricing_config")
 }

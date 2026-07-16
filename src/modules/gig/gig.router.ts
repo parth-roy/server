@@ -7,41 +7,56 @@ import { UserRole } from '@prisma/client';
 
 export const gigRouter = Router();
 
-// Customer Endpoints
+// ── Public ───────────────────────────────────────────────────────────────────
+
+/** GET /gig/catalog — skill categories, zone rates, urgency options (no auth needed) */
+gigRouter.get('/catalog', ctrl.getGigCatalog);
+
+/** POST /gig/estimate — fare preview before booking (no auth needed) */
 gigRouter.post(
-    '/customer',
-    authenticate,
-    requireRole(UserRole.CUSTOMER),
-    validate(schema.createGigSchema),
-    ctrl.createGig
+  '/estimate',
+  validate(schema.estimateGigSchema),
+  ctrl.estimateGig,
 );
 
-gigRouter.get(
-    '/customer',
-    authenticate,
-    requireRole(UserRole.CUSTOMER),
-    ctrl.getCustomerGigs
-);
-
-// Workforce Endpoints
-gigRouter.get(
-    '/nearby',
-    authenticate,
-    requireRole(UserRole.WORKER),
-    ctrl.getNearbyGigs
-);
+// ── Customer ─────────────────────────────────────────────────────────────────
 
 gigRouter.post(
-    '/:id/accept',
-    authenticate,
-    requireRole(UserRole.WORKER),
-    ctrl.acceptGig
+  '/customer',
+  authenticate,
+  requireRole(UserRole.CUSTOMER),
+  validate(schema.createGigSchema),
+  ctrl.createGig,
 );
 
-// Admin Endpoints
 gigRouter.get(
-    '/admin',
-    authenticate,
-    requireRole(UserRole.ADMIN),
-    ctrl.getAllGigsAdmin
+  '/customer',
+  authenticate,
+  requireRole(UserRole.CUSTOMER),
+  ctrl.getCustomerGigs,
+);
+
+// ── Workforce ─────────────────────────────────────────────────────────────────
+
+gigRouter.get(
+  '/nearby',
+  authenticate,
+  requireRole(UserRole.WORKER),
+  ctrl.getNearbyGigs,
+);
+
+gigRouter.post(
+  '/:id/accept',
+  authenticate,
+  requireRole(UserRole.WORKER),
+  ctrl.acceptGig,
+);
+
+// ── Admin ─────────────────────────────────────────────────────────────────────
+
+gigRouter.get(
+  '/admin',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  ctrl.getAllGigsAdmin,
 );
