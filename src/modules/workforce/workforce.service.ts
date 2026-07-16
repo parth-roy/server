@@ -84,10 +84,21 @@ async function deleteOtp(phone: string): Promise<void> {
   try { await redis.del(OTP_KEY(phone)); } catch { /* non-fatal */ }
 }
 
+const DEMO_ACCOUNTS: Record<string, { role: any, staticOtp: string, name: string }> = {
+  '9999999999': { role: 'WORKER', staticOtp: '123456', name: 'Apple Reviewer' },
+};
+const isDemoAccount = (phone: string) => phone in DEMO_ACCOUNTS;
+
 // ─────────────────────────────────────────────
 // AUTH — SEND OTP
 // ─────────────────────────────────────────────
 export async function sendOtp(input: SendOtpInput): Promise<{ message: string }> {
+  // Demo account: skip real OTP delivery
+  if (isDemoAccount(input.phone)) {
+    logger.info(`[Workforce OTP] Demo account ${input.phone} — static OTP accepted, skipping delivery`);
+    return { message: 'OTP sent successfully' };
+  }
+
   const otp = String(crypto.randomInt(100000, 999999));
   await storeOtp(input.phone, otp);
 
@@ -122,11 +133,22 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string }>
 // AUTH — VERIFY OTP → JWT
 // ─────────────────────────────────────────────
 export async function verifyOtp(input: VerifyOtpInput) {
-  const storedOtp = await getOtp(input.phone);
-  if (!storedOtp || storedOtp !== input.otp) {
-    throw AppError.badRequest('Invalid or expired OTP', 'INVALID_OTP');
+  let finalName = input.name;
+
+  if (isDemoAccount(input.phone)) {
+    const demo = DEMO_ACCOUNTS[input.phone];
+    if (input.otp !== demo.staticOtp) {
+      throw AppError.badRequest('Invalid OTP', 'OTP_INVALID');
+    }
+    finalName = finalName || demo.name;
+    logger.info(`[Workforce OTP] Demo account ${input.phone} verified`);
+  } else {
+    const storedOtp = await getOtp(input.phone);
+    if (!storedOtp || storedOtp !== input.otp) {
+      throw AppError.badRequest('Invalid or expired OTP', 'INVALID_OTP');
+    }
+    await deleteOtp(input.phone); // Single-use
   }
-  await deleteOtp(input.phone); // Single-use
 
   // Upsert user with WORKER role
   const user = await prisma.user.upsert({
@@ -134,7 +156,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
     update: {
       isActive: true,
       ...(input.fcmToken && { fcmToken: input.fcmToken }),
-      ...(input.name && { name: input.name }),
+      ...(finalName && { name: finalName }),
     },
     create: {
       phone: input.phone,
@@ -142,7 +164,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
       isActive: true,
       profileComplete: false,
       ...(input.fcmToken && { fcmToken: input.fcmToken }),
-      ...(input.name && { name: input.name }),
+      ...(finalName && { name: finalName }),
     },
     select: { id: true, phone: true, role: true, name: true, profileComplete: true },
   });
