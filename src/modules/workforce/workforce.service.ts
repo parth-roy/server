@@ -672,10 +672,52 @@ export async function acceptJob(userId: string, bookingId: string) {
     throw AppError.conflict('Go online before accepting a job', 'WORKER_NOT_AVAILABLE');
   }
 
-  let acceptedResult: { assignment: any; newAcceptedCount: number; totalSlots: number } | null = null;
+  let acceptedResult: { assignment: any; newAcceptedCount: number; totalSlots: number; isGig: boolean } | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       acceptedResult = await prisma.$transaction(async (tx) => {
+        // Try GigJob first
+        const gigJob = await tx.gigJob.findUnique({ where: { id: bookingId } });
+        if (gigJob) {
+          if (gigJob.status !== 'PENDING') {
+            throw AppError.conflict('This workforce job is no longer open', 'JOB_NOT_OPEN');
+          }
+          
+          const existing = await tx.gigAssignment.findUnique({
+            where: { gigId_workerId: { gigId: bookingId, workerId: worker.id } },
+          });
+          if (existing) throw AppError.conflict('Already responded to this job');
+
+          const acceptedCount = await tx.gigAssignment.count({
+            where: {
+              gigId: bookingId,
+              status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] },
+            },
+          });
+          const totalSlots = gigJob.workersNeeded ?? 1;
+          if (acceptedCount >= totalSlots) {
+            throw AppError.conflict('This job is already full', 'JOB_FULL');
+          }
+
+          const assignment = await tx.gigAssignment.create({
+            data: {
+              gigId: bookingId,
+              workerId: worker.id,
+              status: WorkerJobStatus.ACCEPTED,
+              payoutAmount: gigJob.perWorkerRate > 0 ? gigJob.perWorkerRate : (gigJob.totalFare ?? 0) / totalSlots,
+            },
+          });
+          const workerClaim = await tx.worker.updateMany({
+            where: { id: worker.id, status: WorkerStatus.AVAILABLE, isDocVerified: true },
+            data: { status: WorkerStatus.ON_JOB },
+          });
+          if (workerClaim.count !== 1) {
+            throw AppError.conflict('Worker is no longer available', 'WORKER_NOT_AVAILABLE');
+          }
+          return { assignment, newAcceptedCount: acceptedCount + 1, totalSlots, isGig: true };
+        }
+
+        // Standard Booking
         const booking = await tx.booking.findUnique({
           where: { id: bookingId },
           select: { id: true, laborersCount: true, laborRequired: true, status: true, laborCharge: true },
@@ -717,7 +759,7 @@ export async function acceptJob(userId: string, bookingId: string) {
         if (workerClaim.count !== 1) {
           throw AppError.conflict('Worker is no longer available', 'WORKER_NOT_AVAILABLE');
         }
-        return { assignment, newAcceptedCount: acceptedCount + 1, totalSlots };
+        return { assignment, newAcceptedCount: acceptedCount + 1, totalSlots, isGig: false };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       break;
     } catch (error: any) {
@@ -728,10 +770,10 @@ export async function acceptJob(userId: string, bookingId: string) {
   }
   if (!acceptedResult) throw AppError.conflict('Job acceptance conflicted. Please try again.', 'JOB_ACCEPT_CONFLICT');
 
-  const { assignment, newAcceptedCount, totalSlots } = acceptedResult;
+  const { assignment, newAcceptedCount, totalSlots, isGig } = acceptedResult;
   if (newAcceptedCount >= totalSlots) {
-    emitToBookingRoom(bookingId, 'workers_fully_assigned', {
-      bookingId,
+    emitToBookingRoom(bookingId, isGig ? 'gig_fully_assigned' : 'workers_fully_assigned', {
+      [isGig ? 'gigId' : 'bookingId']: bookingId,
       workerCount: newAcceptedCount,
     });
   }
