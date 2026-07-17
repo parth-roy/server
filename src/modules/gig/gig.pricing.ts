@@ -174,11 +174,12 @@ export function calculateGigFare(req: GigFareRequest): GigFareBreakdown {
   const maxSurgeRate = activeSurgeRates.length > 0 ? Math.max(...activeSurgeRates) : 0;
   const demandSurge  = round2(rawEarnings * maxSurgeRate);
 
-  // Step 6: Travel fee — first 5 km free, ₹15/km beyond
+  // Step 6: Travel fee — first 5 km free, ₹15/km beyond. Capped at ₹150 max.
   const workerDist = req.workerDistanceKm ?? 0;
   const travelFeePerKm = req.travelFeePerKmBeyond5 ?? DEFAULT_TRAVEL_FEE_PER_KM;
   const billableKm = Math.max(0, workerDist - TRAVEL_FREE_KM);
-  const travelFee  = round2(billableKm * travelFeePerKm);
+  const calculatedTravelFee  = round2(billableKm * travelFeePerKm);
+  const travelFee = Math.min(150, calculatedTravelFee); // Capped to avoid astronomical prices during testing
 
   // Worker earnings per person
   const workerEarnings = round2(rawEarnings + urgencyPremium + demandSurge + travelFee);
