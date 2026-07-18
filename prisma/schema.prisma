@@ -1873,7 +1873,7 @@ model GigJob {
   customer   User   @relation(fields: [customerId], references: [id])
 
   gigType     String // legacy free-text kept for old records
-  gigCategory String @default("HELPER") // GigSkill code: HELPER | LOADER | FURNITURE_MOVER etc.
+  gigCategory String  @default("HELPER") // GigSkill code: HELPER | LOADER | FURNITURE_MOVER etc.
   description String?
 
   locationLat     Float
@@ -1881,20 +1881,20 @@ model GigJob {
   locationAddress String
   locationZone    String @default("RURAL") // METRO | TIER2 | RURAL (computed at create)
 
-  durationHours Int          @default(2)         // requested work duration
-  urgency       String       @default("SCHEDULED") // IMMEDIATE | WITHIN_HOUR | SCHEDULED
+  durationHours Int    @default(2) // requested work duration
+  urgency       String @default("SCHEDULED") // IMMEDIATE | WITHIN_HOUR | SCHEDULED
 
   status        GigJobStatus @default(PENDING)
   workersNeeded Int          @default(1)
 
   // Payment fields
-  totalFare        Float   // grandTotal (customer pays)
-  perWorkerRate    Float   @default(0) // worker earnings per person
-  platformFee      Float   @default(0) // platform revenue
-  fareBreakdown    Json?               // full GigFareBreakdown snapshot
-  paymentStatus    PaymentStatus  @default(PENDING)
-  paymentMethod    PaymentMethod?
-  razorpayOrderId  String?
+  totalFare       Float // grandTotal (customer pays)
+  perWorkerRate   Float          @default(0) // worker earnings per person
+  platformFee     Float          @default(0) // platform revenue
+  fareBreakdown   Json? // full GigFareBreakdown snapshot
+  paymentStatus   PaymentStatus  @default(PENDING)
+  paymentMethod   PaymentMethod?
+  razorpayOrderId String?
 
   completionOtp String?
 
@@ -1936,7 +1936,7 @@ model GigPricingConfig {
   value       String
   description String?
   updatedAt   DateTime @updatedAt
-  updatedBy   String?  // admin userId who last changed this
+  updatedBy   String? // admin userId who last changed this
 
   @@map("gig_pricing_config")
 }

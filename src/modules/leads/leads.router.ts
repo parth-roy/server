@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@shared/middleware/validate';
-import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
+import { authenticate, requireRole, optionalAuth } from '@shared/middleware/auth.middleware';
 import { UserRole } from '@prisma/client';
 import * as ctrl from './leads.controller';
 import {
@@ -15,6 +15,7 @@ export const adminLeadsRouter = Router();
 // ── Public Routes (For website forms) ──
 publicLeadsRouter.post(
   '/workforce',
+  optionalAuth,
   validate(CreateWorkforceLeadSchema),
   ctrl.createWorkforceLead
 );
