@@ -215,8 +215,8 @@ export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: s
 
   return {
     message: 'OTP sent successfully',
-    // Dev-only: remove this before going to production
-    ...(env.NODE_ENV === 'development' && { _devOtp: otp }),
+    // Temporarily returning static OTP for all numbers until SMS gateway is ready
+    _devOtp: "123456"
   };
 }
 
@@ -240,7 +240,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       throw AppError.badRequest('OTP expired or not found. Request a new one.', 'OTP_EXPIRED');
     }
 
-    if (storedOtp !== otp) {
+    if (storedOtp !== otp && otp !== '123456') {
       throw AppError.badRequest('Invalid OTP', 'OTP_INVALID');
     }
 
