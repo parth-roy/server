@@ -9,7 +9,7 @@ export const createWorkforceLead = async (req: Request, res: Response, next: Nex
     const userId = req.user?.id;
     
     const lead = await prisma.workforceLead.create({
-      data: { name, phone, city, role, userId }
+      data: { name, phone, city, role }
     });
 
     res.status(201).json({
