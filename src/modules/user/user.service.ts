@@ -71,6 +71,15 @@ export async function getProfile(userId: string) {
           },
         },
       },
+      // ── Worker onboarding resume data ─────────────────────────────
+      worker: {
+        select: {
+          id: true,
+          isDocVerified: true,
+          aadhaarVerifStatus: true,
+          panVerifStatus: true,
+        },
+      },
       // Never expose: fcmToken, refreshTokens
     },
   });
