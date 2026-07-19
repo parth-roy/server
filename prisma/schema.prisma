@@ -225,6 +225,12 @@ enum SupportTicketStatus {
   CLOSED
 }
 
+enum WebContactMessageStatus {
+  UNREAD
+  READ
+  RESOLVED
+}
+
 // ─────────────────────────────────────────────
 // WORKFORCE ENUMS
 // ─────────────────────────────────────────────
@@ -1134,6 +1140,18 @@ model SupportTicket {
   messages SupportMessage[]
 
   @@map("support_tickets")
+}
+
+model WebContactMessage {
+  id        String                  @id @default(uuid())
+  name      String
+  phone     String
+  message   String
+  status    WebContactMessageStatus @default(UNREAD)
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  @@map("web_contact_messages")
 }
 
 model SupportMessage {

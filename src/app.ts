@@ -33,6 +33,7 @@ import { marketplaceRouter } from '@modules/marketplace/marketplace.router';
 import { driverWalletRouter } from '@modules/driver-wallet/driver-wallet.router';
 import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
 import { publicLeadsRouter, adminLeadsRouter } from '@modules/leads/leads.router';
+import { publicContactRouter, adminContactRouter } from '@modules/contact/contact.router';
 import { gigRouter } from '@modules/gig/gig.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
@@ -196,6 +197,10 @@ export function createApp(): Application {
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);
   app.use('/api/v1/admin/leads', adminLeadsRouter);
+
+  // Contact
+  app.use('/api/v1/contact', publicContactRouter);
+  app.use('/api/v1/admin/contact-messages', adminContactRouter);
 
   app.use(notFoundHandler);
   app.use(sentryErrorHandler);
