@@ -2,19 +2,17 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 
-export const createWorkforceLead = async (req: Request, res: Response, next: NextFunction) => {
+export const createLead = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { name, phone, city, role } = req.body;
 
-    const userId = req.user?.id;
-    
-    const lead = await prisma.workforceLead.create({
+    const lead = await prisma.lead.create({
       data: { name, phone, city, role }
     });
 
     res.status(201).json({
       success: true,
-      message: 'Workforce lead application submitted successfully',
+      message: 'Lead application submitted successfully',
       data: lead
     });
   } catch (error) {
@@ -22,7 +20,7 @@ export const createWorkforceLead = async (req: Request, res: Response, next: Nex
   }
 };
 
-export const getWorkforceLeads = async (req: Request, res: Response, next: NextFunction) => {
+export const getLeads = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const status = req.query.status as any;
     const page = Number(req.query.page) || 1;
@@ -31,13 +29,13 @@ export const getWorkforceLeads = async (req: Request, res: Response, next: NextF
     const where: any = status ? { status } : {};
     
     const [leads, total] = await Promise.all([
-      prisma.workforceLead.findMany({
+      prisma.lead.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      prisma.workforceLead.count({ where })
+      prisma.lead.count({ where })
     ]);
 
     res.json({
@@ -55,18 +53,61 @@ export const getWorkforceLeads = async (req: Request, res: Response, next: NextF
   }
 };
 
-export const updateWorkforceLeadStatus = async (req: Request, res: Response, next: NextFunction) => {
+export const updateLeadStatus = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const { status, notes } = req.body;
 
-    const lead = await prisma.workforceLead.update({
+    const lead = await prisma.lead.update({
       where: { id: id as string },
       data: { 
         status,
         ...(notes !== undefined && { notes })
       }
     });
+
+    if (status === 'SUITABLE') {
+      const roleStr = lead.role.toLowerCase();
+      const isDriver = roleStr.includes('driver') || roleStr.includes('fleet') || roleStr.includes('truck');
+      const assignedRole = isDriver ? 'DRIVER' : 'WORKER';
+
+      // Create User if not exists
+      let user = await prisma.user.findUnique({ where: { phone: lead.phone } });
+      if (!user) {
+        user = await prisma.user.create({
+          data: {
+            phone: lead.phone,
+            name: lead.name,
+            role: assignedRole,
+          }
+        });
+      }
+
+      if (isDriver) {
+        // Create Driver Profile
+        const existingDriver = await prisma.driver.findUnique({ where: { userId: user.id } });
+        if (!existingDriver) {
+          await prisma.driver.create({
+            data: {
+              userId: user.id,
+              licenseNumber: `PENDING_${user.id}`,
+            }
+          });
+        }
+      } else {
+        // Create Worker Profile
+        const existingWorker = await prisma.worker.findUnique({ where: { userId: user.id } });
+        if (!existingWorker) {
+          await prisma.worker.create({
+            data: {
+              userId: user.id,
+              isActive: true,
+              isDocVerified: false
+            }
+          });
+        }
+      }
+    }
 
     res.json({
       success: true,

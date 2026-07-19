@@ -4,9 +4,9 @@ import { authenticate, requireRole, optionalAuth } from '@shared/middleware/auth
 import { UserRole } from '@prisma/client';
 import * as ctrl from './leads.controller';
 import {
-  CreateWorkforceLeadSchema,
+  CreateLeadSchema,
   GetLeadsQuerySchema,
-  UpdateWorkforceLeadStatusSchema
+  UpdateLeadStatusSchema
 } from './leads.schema';
 
 export const publicLeadsRouter = Router();
@@ -14,23 +14,23 @@ export const adminLeadsRouter = Router();
 
 // ── Public Routes (For website forms) ──
 publicLeadsRouter.post(
-  '/workforce',
+  '/',
   optionalAuth,
-  validate(CreateWorkforceLeadSchema),
-  ctrl.createWorkforceLead
+  validate(CreateLeadSchema),
+  ctrl.createLead
 );
 
 // ── Admin Routes (Protected) ──
 adminLeadsRouter.use(authenticate, requireRole(UserRole.ADMIN));
 
 adminLeadsRouter.get(
-  '/workforce',
+  '/',
   validate(GetLeadsQuerySchema, 'query'),
-  ctrl.getWorkforceLeads
+  ctrl.getLeads
 );
 
 adminLeadsRouter.patch(
-  '/workforce/:id/status',
-  validate(UpdateWorkforceLeadStatusSchema),
-  ctrl.updateWorkforceLeadStatus
+  '/:id/status',
+  validate(UpdateLeadStatusSchema),
+  ctrl.updateLeadStatus
 );

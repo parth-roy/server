@@ -1840,9 +1840,10 @@ enum LeadStatus {
   CONTACTED
   CONVERTED
   REJECTED
+  SUITABLE
 }
 
-model WorkforceLead {
+model Lead {
   id        String     @id @default(uuid())
   name      String
   phone     String
@@ -1853,7 +1854,7 @@ model WorkforceLead {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  @@map("workforce_leads")
+  @@map("leads")
 }
 
 // ── Gig Workforce (Standalone Jobs) ──────────────────────────────────────────────
