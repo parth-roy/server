@@ -1862,10 +1862,11 @@ enum LeadStatus {
 }
 
 model Lead {
-  id        String     @id @default(uuid())
-  name      String
-  phone     String
-  city      String
+  id          String     @id @default(uuid())
+  name        String
+  companyName String?
+  phone       String
+  city        String
   role      String
   status    LeadStatus @default(PENDING)
   notes     String?

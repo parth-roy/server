@@ -4,10 +4,16 @@ import { AppError } from '@shared/errors/AppError';
 
 export const createLead = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name, phone, city, role } = req.body;
+    const { name, companyName, phone, city, role } = req.body;
 
     const lead = await prisma.lead.create({
-      data: { name, phone, city, role }
+      data: {
+        name,
+        companyName,
+        phone,
+        city,
+        role
+      }
     });
 
     res.status(201).json({
