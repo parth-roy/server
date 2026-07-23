@@ -59,6 +59,42 @@ export const getLeads = async (req: Request, res: Response, next: NextFunction) 
   }
 };
 
+export const getWorkforceLeads = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const status = req.query.status as any;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 50;
+    
+    const where: any = {
+      role: { in: ['WORKFORCE', 'EMPLOYER'] },
+      ...(status ? { status } : {})
+    };
+    
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.lead.count({ where })
+    ]);
+
+    res.json({
+      success: true,
+      data: leads,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const updateLeadStatus = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;

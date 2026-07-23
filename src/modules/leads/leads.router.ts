@@ -29,6 +29,12 @@ adminLeadsRouter.get(
   ctrl.getLeads
 );
 
+adminLeadsRouter.get(
+  '/workforce',
+  validate(GetLeadsQuerySchema, 'query'),
+  ctrl.getWorkforceLeads
+);
+
 adminLeadsRouter.patch(
   '/:id/status',
   validate(UpdateLeadStatusSchema),
