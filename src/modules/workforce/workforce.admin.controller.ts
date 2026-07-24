@@ -33,6 +33,7 @@ export const listWorkforce = async (req: Request, res: Response, next: NextFunct
         take: q.limit,
         include: {
           user: { select: { name: true, phone: true, email: true, profileImageUrl: true } },
+          documents: { select: { status: true, type: true } }
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -55,6 +56,7 @@ export const getWorker = async (req: Request, res: Response, next: NextFunction)
       where: { id },
       include: {
         user: { select: { name: true, phone: true, email: true, profileImageUrl: true } },
+        documents: true,
       },
     });
     if (!worker) throw AppError.notFound('Worker not found');
@@ -86,6 +88,43 @@ export const updateWorkerBankDetails = async (req: Request, res: Response, next:
         bankAccountHolderName: body.bankAccountHolderName,
         bankVerified: body.bankVerified !== undefined ? body.bankVerified : worker.bankVerified,
       },
+    });
+
+    sendSuccess(res, updated);
+  } catch (err) { next(err); }
+};
+
+export const suspendWorker = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = req.params.id as string;
+    const { isActive } = req.body;
+    
+    const worker = await prisma.worker.findUnique({ where: { id } });
+    if (!worker) throw AppError.notFound('Worker not found');
+
+    const updated = await prisma.worker.update({
+      where: { id },
+      data: { isActive: !!isActive },
+    });
+    sendSuccess(res, updated);
+  } catch (err) { next(err); }
+};
+
+export const revokeVerification = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = req.params.id as string;
+    const worker = await prisma.worker.findUnique({ where: { id } });
+    if (!worker) throw AppError.notFound('Worker not found');
+
+    // Revoke verification and set documents to pending so they can be re-evaluated
+    const updated = await prisma.worker.update({
+      where: { id },
+      data: { isDocVerified: false },
+    });
+
+    await prisma.workerDocument.updateMany({
+      where: { workerId: id },
+      data: { status: 'PENDING' },
     });
 
     sendSuccess(res, updated);

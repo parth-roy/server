@@ -67,6 +67,8 @@ import * as workforceAdminCtrl from '@modules/workforce/workforce.admin.controll
 adminRouter.get('/workforce',                         workforceAdminCtrl.listWorkforce);
 adminRouter.get('/workforce/:id',                     workforceAdminCtrl.getWorker);
 adminRouter.patch('/workforce/:id/bank',              workforceAdminCtrl.updateWorkerBankDetails);
+adminRouter.patch('/workforce/:id/suspend',           workforceAdminCtrl.suspendWorker);
+adminRouter.patch('/workforce/:id/revoke-verification', workforceAdminCtrl.revokeVerification);
 
 // ── Fleet Trucks ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-trucks/expiring',             ctrl.getExpiringTrucks);  // BEFORE /:id
